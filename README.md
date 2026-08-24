@@ -1,7 +1,7 @@
 # Smriti Patient History Analyzer 🏥
 
 > **Full-stack AI-Powered Emergency Medical History Analyzer & Intelligent Patient Record Management Platform**  
-> *Developed by **Team Asclepius** | Sharda University | Smart India Hackathon (SIH) 2025*
+> *Developed by **Team Asclepius** 
 
 [![Next.js](https://img.shields.io/badge/Next.js-14.2.5-black?style=for-the-badge&logo=next.js)](https://nextjs.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com/)
