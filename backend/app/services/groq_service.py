@@ -4,12 +4,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
-MODEL = "openai/gpt-oss-120b"
+MODEL_FILTER = os.getenv("GROQ_MODEL_FILTER", "openai/gpt-oss-20b")
+MODEL_RECOMMEND = os.getenv("GROQ_MODEL_RECOMMEND", "openai/gpt-oss-120b")
 
 async def filter_record(record_text: str, symptoms: str) -> str:
     response = await client.chat.completions.create(
-        model=MODEL,
-        max_tokens=400,
+        model=MODEL_FILTER,
+        max_tokens=300,
         messages=[{
             "role": "user",
             "content": f"Patient symptoms: {symptoms}\n\nFull record:\n{record_text}\n\nExtract only the medically relevant parts for these symptoms. Be concise."
@@ -19,8 +20,8 @@ async def filter_record(record_text: str, symptoms: str) -> str:
 
 async def get_recommendation(filtered: str, symptoms: str, patient: dict) -> dict:
     response = await client.chat.completions.create(
-        model=MODEL,
-        max_tokens=4000,
+        model=MODEL_RECOMMEND,
+        max_tokens=1000,
         response_format={"type": "json_object"},
         messages=[{
             "role": "system",

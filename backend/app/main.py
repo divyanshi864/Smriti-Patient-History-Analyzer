@@ -26,6 +26,16 @@ if fb_path and os.path.exists(fb_path) and not firebase_admin._apps:
 app = FastAPI(title="Smriti v3")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
+@app.middleware("http")
+async def log_request_latency(request: Request, call_next):
+    import time
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = (time.perf_counter() - start) * 1000
+    response.headers["X-Process-Time-Ms"] = f"{duration_ms:.2f}"
+    print(f"⏱️ [{request.method}] {request.url.path} -> {duration_ms:.2f} ms")
+    return response
+
 class AnalyzeRequest(BaseModel):
     patient_id: str
     symptoms: str
@@ -134,7 +144,7 @@ async def analyze(req: AnalyzeRequest):
 async def medicine_suggestions(req: MedSuggestionRequest):
     client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
     response = await client.chat.completions.create(
-        model="llama-3.3-70b-versatile", max_tokens=300,
+        model=os.getenv("GROQ_MODEL_SUGGEST", "openai/gpt-oss-20b"), max_tokens=300,
         messages=[{
             "role": "system",
             "content": "You are a clinical pharmacist. Return ONLY a JSON array of medicine strings, no other text."
