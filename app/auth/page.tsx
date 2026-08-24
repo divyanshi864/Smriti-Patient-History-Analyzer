@@ -43,10 +43,12 @@ function AuthForm() {
   const [countryCode, setCountryCode] = useState('+91')
   const [showPicker, setShowPicker] = useState(false)
   const [phone, setPhone] = useState('')
+  const [patientEmail, setPatientEmail] = useState('')
   const [otp, setOtp] = useState('')
   const [patientStep, setPatientStep] = useState<1 | 2 | 3 | 4>(1)
   const [resendTimer, setResendTimer] = useState(0)
   const [existingPatients, setExistingPatients] = useState<any[]>([])
+  const [confirmationResult, setConfirmationResult] = useState<any>(null)
 
   // Registration
   const [regName, setRegName] = useState('')
@@ -88,30 +90,50 @@ function AuthForm() {
   }
 
   const handleSendOtp = async () => {
-    if (!phone) { setError('Enter your phone number'); return }
-    setLoading(true); setError('')
+    if (!patientEmail || !patientEmail.includes('@')) { setError('Enter a valid Gmail / Email address'); return }
+    setLoading(true); setError(''); setMsg('')
     try {
-      const res = await fetch('/api/request-otp', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: fullPhone }) })
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/request-email-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: patientEmail })
+      })
       const data = await res.json()
-      if (res.ok && data.success) { setPatientStep(2); setMsg('OTP sent! If number not on Twilio trial, use 000000 as demo code.'); startTimer() }
-      else throw new Error(data.error || 'Failed to send OTP')
-    } catch (e: any) { setError(e.message) }
+      if (!res.ok) throw new Error(data.detail || data.error || 'Failed to send OTP')
+
+      setPatientStep(2)
+      setMsg(`OTP sent to ${patientEmail}! Check your inbox.`)
+      startTimer()
+    } catch (e: any) {
+      setError(e.message || 'Failed to send OTP')
+    }
     setLoading(false)
   }
 
   const handleVerifyOtp = async () => {
-    if (!otp) { setError('Enter the OTP'); return }
-    setLoading(true); setError('')
+    if (!otp) { setError('Enter the 6-digit OTP'); return }
+    setLoading(true); setError(''); setMsg('')
     try {
-      const res = await fetch('/api/verify-otp', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: fullPhone, code: otp }) })
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/verify-email-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: patientEmail, code: otp })
+      })
       const data = await res.json()
-      if (res.ok && data.success) {
-        const { data: profiles } = await supabase.from('user_profiles').select('*').eq('email', fullPhone).eq('role', 'patient')
-        if (profiles && profiles.length > 0) { setExistingPatients(profiles); setPatientStep(3) }
-        else { setExistingPatients([]); setPatientStep(4) }
-        setMsg('')
-      } else throw new Error(data.error || 'Invalid OTP')
-    } catch (e: any) { setError(e.message) }
+      if (!res.ok) throw new Error(data.detail || data.error || 'Invalid OTP code')
+
+      const { data: profiles } = await supabase.from('user_profiles').select('*').eq('email', patientEmail).eq('role', 'patient')
+      if (profiles && profiles.length > 0) {
+        setExistingPatients(profiles)
+        setPatientStep(3)
+      } else {
+        setExistingPatients([])
+        setPatientStep(4)
+      }
+      setMsg('')
+    } catch (e: any) {
+      setError(e.message || 'Invalid OTP code')
+    }
     setLoading(false)
   }
 
@@ -130,16 +152,16 @@ function AuthForm() {
       if (!pid) { setError('Invalid date of birth'); setLoading(false); return }
       const { data: existing } = await supabase.from('user_profiles').select('id').eq('patient_id', pid).single()
       if (existing) { setError(`ID ${pid} already exists. Check your date of birth and Aadhar digits.`); setLoading(false); return }
-      const { error: profileErr } = await supabase.from('user_profiles').insert({ name: regName, role: 'patient', email: fullPhone, patient_id: pid })
+      const { error: profileErr } = await supabase.from('user_profiles').insert({ name: regName, role: 'patient', email: patientEmail, patient_id: pid })
       if (profileErr) throw profileErr
       const dob = new Date(regDob)
       const age = Math.floor((Date.now() - dob.getTime()) / (365.25 * 24 * 60 * 60 * 1000))
-      const recordText = `Patient: ${regName}. DOB: ${regDob}. Age: ${age}. Blood Group: ${regBlood}. Allergies: ${regAllergies || 'None known'}. Medications: ${regMeds || 'None'}. Phone: ${fullPhone}. Registered via Smriti.`
-      await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/patients`, {
+      const recordText = `Patient: ${regName}. DOB: ${regDob}. Age: ${age}. Blood Group: ${regBlood}. Allergies: ${regAllergies || 'None known'}. Medications: ${regMeds || 'None'}. Email: ${patientEmail}. Registered via Smriti.`
+      await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/patients`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: pid, name: regName, age, blood_type: regBlood, allergies: regAllergies || 'None known', medications: regMeds || 'None', record_text: recordText })
       }).catch(() => { })
-      const session = { name: regName, role: 'patient', email: fullPhone, patient_id: pid, dob: regDob }
+      const session = { name: regName, role: 'patient', email: patientEmail, patient_id: pid, dob: regDob }
       localStorage.setItem('patient_session', JSON.stringify(session))
       setMsg(`Registered! Your Patient ID: ${pid}`)
       setTimeout(() => router.push('/patient'), 1500)
@@ -196,17 +218,17 @@ function AuthForm() {
 
   return (
     <>
-      <style>{`
+      <style jsx global>{`
         
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Fraunces:ital,wght@0,500;0,600;1,400&display=swap');
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         html, body { height: 100%; font-family: 'DM Sans', sans-serif; }
-        .auth-root { min-height: 100vh; display: flex; }
-        .lp { width: 42%; flex-shrink: 0; display: flex; flex-direction: column; justify-content: center; padding: 48px 44px; position: relative; overflow: hidden; }
-        @media (max-width: 860px) { .lp { display: none; } }
-        .lp-ring { position: absolute; border-radius: 50%; pointer-events: none; }
-        .rp { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px 44px; overflow-y: auto; min-height: 100vh; }
-        .rp-inner { width: 100%; max-width: 420px; }
+        .auth-root { min-height: 100vh; background: #F4F7FB; display: flex; align-items: center; justify-content: center; padding: 40px 20px; }
+        .auth-container { display: flex; width: 100%; max-width: 1080px; min-height: 640px; background: white; border-radius: 24px; box-shadow: 0 20px 40px rgba(0,0,0,0.05); overflow: hidden; }
+        .lp { width: 50%; flex-shrink: 0; display: flex; flex-direction: column; position: relative; overflow: hidden; }
+        @media (max-width: 860px) { .lp { display: none; } .auth-container { height: auto; align-items: center; } }
+        .rp { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px 44px; overflow-y: auto; }
+        .rp-inner { width: 100%; max-width: 380px; margin: auto; }
         .back-btn { display:flex; align-items:center; gap:6px; font-size:13px; background:none; border:none; cursor:pointer; font-family:inherit; margin-bottom:28px; padding:0; opacity:0.8; }
         .back-btn:hover { opacity: 1; }
         .c-hdr { display:flex; align-items:center; gap:13px; margin-bottom:22px; }
@@ -246,85 +268,146 @@ function AuthForm() {
       `}</style>
 
       <div className="auth-root" onClick={() => setShowPicker(false)}>
+        <div className="auth-container">
 
-        {/* LEFT PANEL */}
+        {/* ILLUSTRATION LEFT PANEL (Based on User Reference) */}
         <div
           className="lp"
           style={{
-            background: T.lpBg,
-            boxShadow: 'inset -10px 0 40px rgba(0,0,0,0.05)'
+             background: isDoctor ? '#F5FAF7' : '#F6F8FD',
+             position: 'relative',
+             padding: '40px',
+             justifyContent: 'space-between'
           }}
         >
-          <div className="lp-ring" style={{
-            width: 360,
-            height: 360,
-            border: `1.5px solid ${T.lpRing}`,
-            top: -120,
-            left: -120,
-            opacity: 0.6
-          }} />
+           {/* Modern Abstract Faint Background Shape */}
+           <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 0, opacity: 0.7, pointerEvents: 'none' }} viewBox="0 0 100 100" preserveAspectRatio="none">
+             <path d="M0,0 L70,0 C90,40 60,70 100,100 L0,100 Z" fill={isDoctor ? '#E8F5ED' : '#E8ECF8'} />
+           </svg>
 
-          <div className="lp-ring" style={{
-            width: 240,
-            height: 240,
-            border: `1px solid ${T.lpRing}`,
-            bottom: -80,
-            right: -80,
-            opacity: 0.5
-          }} />
+           {/* Top Left Logo & Minimal Text (Home Page Style) */}
+           <div style={{ position: 'relative', zIndex: 2 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '11px', marginBottom: '8px' }}>
+                 <div style={{ width: '48px', height: '48px', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                    <img src="/logo2.png" alt="Smriti Logo" style={{ width: "80%", height: "80%", objectFit: "cover", transform: "scale(1.4)" }} />
+                 </div>
+                 <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                       <span style={{ fontFamily: "'Fraunces', serif", fontSize: '24px', fontWeight: 700, color: isDoctor ? '#1A3D2B' : '#1E2860', letterSpacing: '-0.5px', lineHeight: 1 }}>Smriti</span>
+                       <div style={{ background: isDoctor ? '#C8E0D0' : '#CDD0EE', color: isDoctor ? '#1A3D2B' : '#1E2860', fontSize: 9, fontWeight: 800, padding: '2px 6px', borderRadius: 10 }}>
+                         {isDoctor ? 'PRO' : 'HUB'}
+                       </div>
+                    </div>
+                    <div style={{ fontSize: '9.5px', fontWeight: 600, letterSpacing: '2px', textTransform: 'uppercase', color: isDoctor ? '#5A9E78' : '#6878C8', marginTop: '6px' }}>smart patient insights</div>
+                 </div>
+              </div>
+              
+              <div style={{ fontSize: '13.5px', color: isDoctor ? '#4A7060' : '#4858A0', fontWeight: 500, maxWidth: '270px', lineHeight: 1.5, opacity: 0.9, marginTop: '20px' }}>
+                 {isDoctor ? 'The intelligent operating system for premium clinical care.' : 'Your secure timeline for holistic, end-to-end healthcare.'}
+              </div>
+           </div>
 
-          <div className="lp-ring" style={{
-            width: 140,
-            height: 140,
-            background: 'rgba(255,255,255,0.25)',
-            top: '40%',
-            right: -30,
-            filter: 'blur(2px)'
-          }} />
+           {/* Central Embedded Flat Illustration (CSS/SVG Mocking) */}
+           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', zIndex: 2, marginTop: '20px' }}>
+              <div style={{ position: 'relative', width: '320px', height: '300px' }}>
+                 
+                 {/* Window/Form Interface (Medical Chart vs Privacy Vault) */}
+                 <div style={{ position: 'absolute', top: '10%', right: '5%', width: '180px', height: '160px', background: 'white', borderRadius: '8px', boxShadow: '0 10px 25px rgba(0,0,0,0.04)', border: '2px solid #E2E8F0', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px', overflow: 'hidden' }}>
+                    <div style={{ width: '40%', height: '10px', background: '#E2E8F0', borderRadius: '4px' }} />
+                    <div style={{ width: '100%', height: '22px', border: '2px solid #E2E8F0', borderRadius: '4px', marginTop: '8px', position: 'relative' }}>
+                       {/* Contextual inner drawing */}
+                       {isDoctor && (
+                         <svg style={{ position: 'absolute', top: 2, left: 2 }} width="100" height="14" viewBox="0 0 100 14" fill="none" stroke="#5A9E78" strokeWidth="2">
+                           <polyline points="0,7 20,7 30,2 40,12 50,7 100,7" strokeLinejoin="round" />
+                         </svg>
+                       )}
+                    </div>
+                    <div style={{ width: '100%', height: '22px', border: '2px solid #E2E8F0', borderRadius: '4px' }} />
+                    <div style={{ width: '50%', height: '22px', background: isDoctor ? '#5A9E78' : '#6878C8', borderRadius: '4px', marginTop: 'auto' }} />
+                 </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 44, position: 'relative', zIndex: 1 }}>
-            <div style={{ width: 40, height: 40, borderRadius: 13, background: T.iconBg, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: `0 4px 16px ${T.btnShadow}` }}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
-                <path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2V9M9 21H5a2 2 0 0 1-2-2V9m0 0h18" />
-              </svg>
-            </div>
-            <span style={{
-              fontFamily: "'Fraunces',serif",
-              fontSize: 22,
-              fontWeight: 600,
-              color: T.accent,
-              letterSpacing: '0.5px'
-            }}>
-              Smriti
-            </span>
-          </div>
+                 {/* Decorative Dotted Path */}
+                 <svg style={{ position: 'absolute', top: '0%', left: '15%', width: '160px', height: '120px', overflow: 'visible', zIndex: 0 }}>
+                    <path d="M 0,80 C 20,-20 120,10 160,50" fill="none" stroke="#94A3B8" strokeWidth="2" strokeDasharray="5 5" />
+                 </svg>
 
-          <div style={{ position: 'relative', zIndex: 1 }}>
-            <div style={{display: 'inline-flex',alignItems: 'center',gap: 7,background: 'rgba(255,255,255,0.65)',backdropFilter: 'blur(6px)',border: `1px solid ${T.lpRing}`,borderRadius: 20,padding: '4px 13px',fontSize: 11,color: T.accent,fontWeight: 500,marginBottom: 18}}>
-              <div style={{ width: 6, height: 6, borderRadius: '50%', background: T.dot }} />
-              {isDoctor ? 'Doctor Portal' : 'Patient Portal'}
-            </div>
-            <div style={{ fontFamily: "'Fraunces',serif", fontSize: 34, letterSpacing: '-0.5px', fontWeight: 500, color: T.accent, lineHeight: 1.3, marginBottom: 14 }}>
-              {isDoctor ? <>Your patients,<br /><em style={{ fontStyle: 'italic', opacity: 0.7 }}>always</em><br />within reach.</> : <>Your health,<br /><em style={{ fontStyle: 'italic', opacity: 0.7 }}>always</em><br />in your hands.</>}
-            </div>
-            <div style={{ fontSize: 13, color: T.sub, lineHeight: 1.75, maxWidth: 260, marginBottom: 32 }}>
-              {isDoctor ? 'Access complete patient histories, AI diagnostics, and treatment workflows — secure and instant.'
-                : 'View your medical history, prescriptions, uploaded reports and health timeline anytime.'}
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {(isDoctor
-                ? ['AI diagnostic suggestions', 'Complete patient history', 'Emergency treatment workflows', 'Secure encrypted records']
-                : ['View medical history anytime', 'Access prescriptions & reports', 'OTP-based secure login', 'Aadhar-linked identity']
-              ).map(f => (
-                <div key={f} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: T.feat }}>
-                  <div style={{ width: 20, height: 20, borderRadius: 6, background: 'rgba(255,255,255,0.55)', border: '1px solid rgba(255,255,255,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                    <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke={T.checkStroke} strokeWidth="2.5" strokeLinecap="round"><polyline points="2,6 5,9 10,3" /></svg>
-                  </div>
-                  {f}
-                </div>
-              ))}
-            </div>
-          </div>
+                 {/* Floating Top Icon (Medical Cross vs Shield) */}
+                 <div style={{ position: 'absolute', top: '-10%', right: '25%', width: '48px', height: '48px', background: 'white', borderRadius: '50%', border: `3px solid ${isDoctor ? '#5A9E78' : '#6878C8'}`, boxShadow: '0 8px 16px rgba(0,0,0,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    {isDoctor ? (
+                       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#5A9E78" strokeWidth="2.5"><rect x="3" y="3" width="18" height="18" rx="2" /><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+                    ) : (
+                       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#6878C8" strokeWidth="2.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                    )}
+                 </div>
+
+                 {/* Bottom Prop: Medical kit / Secure file vault */}
+                 <div style={{ position: 'absolute', bottom: '15%', right: '0%', width: '60px', height: '60px', zIndex: 1 }}>
+                    {isDoctor ? (
+                       <>
+                         <div style={{ width: '60px', height: '45px', background: '#0F172A', borderRadius: '6px' }} />
+                         <div style={{ position: 'absolute', top: '-6px', left: '20px', width: '20px', height: '10px', border: '3px solid #0F172A', borderBottom: 'none', borderRadius: '4px 4px 0 0' }} />
+                         <div style={{ position: 'absolute', top: '15px', left: '22px', color: 'white', fontWeight: 900, fontSize: 18, lineHeight: 1 }}>+</div>
+                       </>
+                    ) : (
+                       <>
+                         <div style={{ width: '50px', height: '60px', background: '#0F172A', borderRadius: '6px' }} />
+                         <div style={{ position: 'absolute', top: '20px', left: '15px', width: '20px', height: '4px', background: '#6878C8', borderRadius: '2px' }} />
+                         <div style={{ position: 'absolute', top: '30px', left: '15px', width: '14px', height: '4px', background: '#CBD5E1', borderRadius: '2px' }} />
+                       </>
+                    )}
+                 </div>
+
+                 {/* Floating Right Icon matching Ref */}
+                 <div style={{ position: 'absolute', bottom: '40%', right: '-8%', width: '60px', height: '60px', background: 'white', borderRadius: '50%', border: `2px solid ${isDoctor ? '#5A9E78' : '#6878C8'}`, boxShadow: '0 10px 20px rgba(0,0,0,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2 }}>
+                    {isDoctor ? (
+                       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#5A9E78" strokeWidth="2.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                    ) : (
+                       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6878C8" strokeWidth="2.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                    )}
+                 </div>
+
+                 {/* Flat Abstract Person (Doctor vs Patient) */}
+                 <div style={{ position: 'absolute', bottom: '15%', left: '0%', width: '100px', height: '170px', zIndex: 3 }}>
+                    <div style={{ position: 'absolute', bottom: 0, left: '26px', width: '14px', height: '80px', background: '#94A3B8' }} />
+                    <div style={{ position: 'absolute', bottom: 0, left: '46px', width: '14px', height: '80px', background: '#CBD5E1' }} />
+                    <div style={{ position: 'absolute', bottom: 0, left: '20px', width: '22px', height: '8px', background: '#0F172A', borderRadius: '4px' }} />
+                    <div style={{ position: 'absolute', bottom: 0, left: '46px', width: '22px', height: '8px', background: '#0F172A', borderRadius: '4px' }} />
+                    
+                    {/* Torso */}
+                    {isDoctor ? (
+                       <>
+                          {/* Inner scrubs */}
+                          <div style={{ position: 'absolute', top: '40px', left: '10px', width: '66px', height: '60px', background: '#5A9E78', borderRadius: '30px 30px 10px 10px' }} />
+                          {/* White Doctor Coat */}
+                          <div style={{ position: 'absolute', top: '40px', left: '5px', width: '25px', height: '80px', background: 'white', borderRadius: '15px 0 0 5px', borderRight: '2px solid #E2E8F0' }} />
+                          <div style={{ position: 'absolute', top: '40px', right: '15px', width: '25px', height: '80px', background: 'white', borderRadius: '0 15px 5px 0', borderLeft: '2px solid #E2E8F0' }} />
+                          {/* Stethoscope */}
+                          <svg style={{ position: 'absolute', top: '45px', left: '20px', width: '50px', height: '40px', overflow: 'visible' }}>
+                             <path d="M 5,0 C 5,30 40,30 40,0" fill="none" stroke="#0F172A" strokeWidth="2.5" />
+                             <circle cx="40" cy="5" r="4" fill="#0F172A" />
+                          </svg>
+                       </>
+                    ) : (
+                       <div style={{ position: 'absolute', top: '40px', left: '10px', width: '66px', height: '60px', background: '#1E2860', borderRadius: '30px 30px 10px 10px' }} />
+                    )}
+
+                    {/* Head */}
+                    <div style={{ position: 'absolute', top: '-10px', left: '26px', width: '34px', height: '34px', background: '#FFD3B6', borderRadius: '50%' }} />
+                    {/* Hair */}
+                    <div style={{ position: 'absolute', top: '-14px', left: '24px', width: '38px', height: '22px', background: '#0F172A', borderRadius: '19px 19px 0 0' }} />
+                 </div>
+
+                 {/* Floor / Ground line */}
+                 <div style={{ position: 'absolute', bottom: '15%', left: '-30px', width: '380px', height: '2px', background: '#CBD5E1', zIndex: 0 }} />
+                 
+              </div>
+           </div>
+
+           {/* Bottom Minimal Copyright */}
+           <div style={{ position: 'relative', zIndex: 2, fontSize: '11.5px', color: isDoctor ? '#5A9E78' : '#6878C8', fontWeight: 600 }}>
+              © {new Date().getFullYear()} Smriti. All rights reserved.
+           </div>
+
         </div>
 
         {/* RIGHT PANEL */}
@@ -339,6 +422,7 @@ function AuthForm() {
 
             {error && <div className="alert alert-err">{error}</div>}
             {msg && <div className="alert alert-ok">{msg}</div>}
+            <div id="recaptcha-container"></div>
 
             {/* DOCTOR */}
             {isDoctor && (
@@ -395,43 +479,29 @@ function AuthForm() {
                   <div className="c-icon" style={{ background: T.iconBg, boxShadow: `0 4px 16px ${T.btnShadow}` }}>👤</div>
                   <div>
                     <div style={{ fontFamily: "'Fraunces',serif", fontSize: 21, fontWeight: 600, color: T.accent }}>Patient Portal</div>
-                    <div style={{ fontSize: 12.5, color: T.sub, marginTop: 3 }}>Phone OTP login</div>
+                    <div style={{ fontSize: 12.5, color: T.sub, marginTop: 3 }}>Email OTP login</div>
                   </div>
                 </div>
                 <div className="step-bar">
                   <div className="sp" style={{ background: T.stepDone }} /><div className="sp" style={{ background: T.stepEmpty }} />
                 </div>
                 <div className="field">
-                  <label className="flabel" style={{ color: T.lbl }}>Phone Number</label>
-                  <div className="phone-row" onClick={e => e.stopPropagation()}>
-                    <div style={{ position: 'relative', flexShrink: 0 }}>
-                      <button className="cbtn" style={{ borderColor: T.border, color: T.txt }} onClick={() => setShowPicker(!showPicker)}>
-                        <span style={{ fontSize: 18 }}>{selectedCountry.flag}</span>
-                        <span>{selectedCountry.code}</span>
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="6 9 12 15 18 9" /></svg>
-                      </button>
-                      {showPicker && (
-                        <div className="cdd" style={{ border: `1px solid ${T.border}` }}>
-                          {COUNTRIES.map(c => (
-                            <button key={c.code} className="copt"
-                              style={{ background: c.code === countryCode ? T.rightBg : 'none', color: c.code === countryCode ? T.accent : T.txt, fontWeight: c.code === countryCode ? 500 : 400 }}
-                              onClick={() => { setCountryCode(c.code); setShowPicker(false) }}>
-                              <span style={{ fontSize: 16 }}>{c.flag}</span>
-                              <span style={{ flex: 1 }}>{c.name}</span>
-                              <span style={{ fontSize: 11, opacity: 0.6 }}>{c.code}</span>
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    <input type="tel" value={phone} onChange={e => { setPhone(e.target.value.replace(/\D/g, '')); setError('') }}
-                      placeholder="9876543210" style={{ ...inp(), flex: 1 }} onFocus={onFocus} onBlur={onBlur} />
+                  <label className="flabel" style={{ color: T.lbl }}>Email Address</label>
+                  <div className="fwrap">
+                    <span className="ficon" style={{ color: T.ficon }}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                        <rect x="2" y="4" width="20" height="16" rx="2" /><polyline points="2,4 12,13 22,4" />
+                      </svg>
+                    </span>
+                    <input type="email" value={patientEmail} onChange={e => { setPatientEmail(e.target.value); setError('') }}
+                      placeholder="patient@gmail.com" style={inpIcon} onFocus={onFocus} onBlur={onBlur}
+                      onKeyDown={e => e.key === 'Enter' && handleSendOtp()} />
                   </div>
-                  <p style={{ fontSize: 11, color: T.note, marginTop: 5 }}>Enter number without country code</p>
+                  <p style={{ fontSize: 11, color: T.note, marginTop: 5 }}>Enter your Gmail or Email address to receive your 6-digit OTP</p>
                 </div>
-                <button className="btn-main" onClick={handleSendOtp} disabled={loading || !phone}
+                <button className="btn-main" onClick={handleSendOtp} disabled={loading || !patientEmail}
                   style={{ background: T.btnBg, boxShadow: `0 4px 18px ${T.btnShadow}` }}>
-                  {loading ? 'Sending OTP...' : '📱 Send OTP via SMS'}
+                  {loading ? 'Sending OTP...' : '✉️ Send OTP to Email'}
                 </button>
               </>
             )}
@@ -443,16 +513,15 @@ function AuthForm() {
                   <div className="c-icon" style={{ background: T.iconBg, boxShadow: `0 4px 16px ${T.btnShadow}` }}>👤</div>
                   <div>
                     <div style={{ fontFamily: "'Fraunces',serif", fontSize: 21, fontWeight: 600, color: T.accent }}>Verify OTP</div>
-                    <div style={{ fontSize: 12.5, color: T.sub, marginTop: 3 }}>Sent to {fullPhone}</div>
+                    <div style={{ fontSize: 12.5, color: T.sub, marginTop: 3 }}>Sent to {patientEmail}</div>
                   </div>
                 </div>
                 <div className="step-bar">
                   <div className="sp" style={{ background: T.stepDone }} /><div className="sp" style={{ background: T.stepDone }} />
                 </div>
-                <div className="alert alert-warn">💡 If SMS not received, enter <strong>000000</strong> as demo bypass</div>
                 <div className="field">
                   <label className="flabel" style={{ color: T.lbl }}>Enter 6-digit OTP</label>
-                  <p style={{ fontSize: 12, color: T.note, marginBottom: 8 }}>Sent to {fullPhone}</p>
+                  <p style={{ fontSize: 12, color: T.note, marginBottom: 8 }}>Sent to {patientEmail}</p>
                   <input className="otp-input" type="number" value={otp} onChange={e => { setOtp(e.target.value); setError('') }}
                     placeholder="123456" style={{ borderColor: T.border, color: T.txt }} onFocus={onFocus} onBlur={onBlur} />
                 </div>
@@ -464,7 +533,7 @@ function AuthForm() {
                   {resendTimer > 0 ? <span>Resend in {resendTimer}s</span>
                     : <button style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, color: T.link, textDecoration: 'underline' }} onClick={handleSendOtp}>Resend OTP</button>}
                 </div>
-                <button className="btn-lnk" style={{ color: T.note }} onClick={() => { setPatientStep(1); setOtp(''); setError('') }}>← Change number</button>
+                <button className="btn-lnk" style={{ color: T.note }} onClick={() => { setPatientStep(1); setOtp(''); setError('') }}>← Change Email</button>
               </>
             )}
 
@@ -478,7 +547,7 @@ function AuthForm() {
                     <div style={{ fontSize: 12.5, color: T.sub, marginTop: 3 }}>{existingPatients.length} profile(s) found</div>
                   </div>
                 </div>
-                <p style={{ fontSize: 13, color: T.note, marginBottom: 14 }}>Profiles under <strong style={{ color: T.accent }}>{fullPhone}</strong></p>
+                <p style={{ fontSize: 13, color: T.note, marginBottom: 14 }}>Profiles under <strong style={{ color: T.accent }}>{patientEmail}</strong></p>
                 {existingPatients.map((p, i) => (
                   <button key={i} className="pcard" onClick={() => handleSelectPatient(p)}
                     style={{ borderColor: T.border, background: 'rgba(255,255,255,0.8)' }}>
@@ -501,7 +570,7 @@ function AuthForm() {
                     <p style={{ fontSize: 11, marginTop: 2, color: T.note }}>Register another person</p>
                   </div>
                 </button>
-                <button className="btn-lnk" style={{ color: T.note }} onClick={() => { setPatientStep(1); setOtp(''); setExistingPatients([]) }}>← Different number</button>
+                <button className="btn-lnk" style={{ color: T.note }} onClick={() => { setPatientStep(1); setOtp(''); setExistingPatients([]) }}>← Different Email</button>
               </>
             )}
 
@@ -509,13 +578,13 @@ function AuthForm() {
             {!isDoctor && patientStep === 4 && (
               <>
                 <div className="c-hdr">
-                  <div className="c-icon" style={{ background: T.iconBg, boxShadow: `0 4px 16px ${T.btnShadow}` }}>img src=C:\Users\Lenovo\Downloads\smriti_FINAL\smriti_FINAL\smriti-final\public</div>
+                  <div className="c-icon" style={{ background: T.iconBg, boxShadow: `0 4px 16px ${T.btnShadow}` }}>👤</div>
                   <div>
                     <div style={{ fontFamily: "'Fraunces',serif", fontSize: 21, fontWeight: 600, color: T.accent }}>Register Patient</div>
                     <div style={{ fontSize: 12.5, color: T.sub, marginTop: 3 }}>Aadhar-based ID</div>
                   </div>
                 </div>
-                <div className="alert alert-ok">✅ Phone verified! Your ID will be generated from your DOB + Aadhar.</div>
+                <div className="alert alert-ok">✅ Email verified! Your ID will be generated from your DOB + Aadhar.</div>
                 {previewId && (
                   <div className="id-box" style={{ background: T.previewBg }}>
                     <p style={{ fontSize: 11, color: T.previewLbl, marginBottom: 4 }}>Your Patient ID will be</p>
@@ -565,6 +634,7 @@ function AuthForm() {
               By continuing you agree to our{' '}
               <a href="#" style={{ color: T.link }}>Terms</a> &amp; <a href="#" style={{ color: T.link }}>Privacy Policy</a>
             </div>
+          </div>
           </div>
         </div>
       </div>

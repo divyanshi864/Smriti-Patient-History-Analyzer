@@ -9,7 +9,8 @@ export default function LandingPage() {
 
   return (
     <>
-      <style>{`
+      <style dangerouslySetInnerHTML={{
+        __html: `
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Fraunces:ital,wght@0,500;0,600;1,400&display=swap');
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         html, body { height: 100%; font-family: 'DM Sans', sans-serif; }
@@ -27,29 +28,23 @@ export default function LandingPage() {
         z-index: 10;
         }
 
-        /* ── NAVBAR — starts after diagonal cut ── */
+        /* ── NAVBAR ── */
         .navbar {
-       position: absolute;
-  top: 0;
-  left: 49.9999999999999999999999%;
-  right: 0;
-  height: 58px;
-  padding: 0 44px;
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 6px;
-  background: linear-gradient(180deg, #F7FBF9 0%, #F4F8F5 100%);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(16px);
-  border-bottom: 1px solid rgba(90,158,120,0.10);
-  z-index: 50;
-}
+          position: absolute;
+          top: 0; left: 0; right: 0;
+          height: 80px;
+          padding: 0 6%;
+          display: flex;
+          justify-content: flex-end;
+          align-items: center;
+          background: transparent;
+          z-index: 50;
+        }
 
         .nav-link {
           display: flex; align-items: center; gap: 6px;
-          font-size: 13px; font-weight: 500; color: #4A7060;
-          padding: 7px 15px; border-radius: 20px;
+          font-size: 14px; font-weight: 500; color: #4A7060;
+          padding: 8px 18px; border-radius: 20px;
           border: 1.5px solid rgba(90,158,120,0.20);  
           text-decoration: none;
           transition: all 0.22s;
@@ -63,38 +58,38 @@ export default function LandingPage() {
         }
 
         .nav-pill {
-          display: flex; align-items: center; gap: 6px;
-          font-size: 13px; font-weight: 500; color: white;
-          padding: 7px 18px; border-radius: 20px;
+          display: flex; align-items: center; gap: 8px;
+          font-size: 14px; font-weight: 600; color: white;
+          padding: 10px 24px; border-radius: 24px;
           text-decoration: none;
           background: linear-gradient(135deg, #5A9E78, #3D7A5A);
-          box-shadow: 0 2px 10px rgba(90,158,120,0.28);
-          transition: all 0.22s;
+          box-shadow: 0 4px 14px rgba(90,158,120,0.25);
+          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
           font-family: 'DM Sans', sans-serif;
         }
         .nav-pill:hover {
-          transform: translateY(-1px);
-          box-shadow: 0 5px 18px rgba(90,158,120,0.38);
+          transform: translateY(-2px);
+          box-shadow: 0 6px 20px rgba(90,158,120,0.4);
         }
 
         /* ── DIAGONAL BG ── */
         .diag-bg {
           position: absolute;
           top: 0; left: 0;
-          width: 50%; height: 100%;
+          width: 100%; height: 100%;
           background: linear-gradient(160deg, #E8F5ED 0%, #CDEADB 100%);
-          clip-path: polygon(0 0, 100% 0, 82% 100%, 0 100%);
+          clip-path: polygon(0 0, 56% 0, 44% 100%, 0% 100%);
           z-index: 0;
         }
 
         /* ── LEFT COLUMN ── */
         .left-col {
-          width: 48%;
-          padding: 48px 52px;
+          width: 50%;
+          padding: 95px 4% 24px 7%;
           display: flex;
           flex-direction: column;
           justify-content: flex-start;
-          gap: 50px;
+          gap: 28px;
           position: relative;
           z-index: 2;
         }
@@ -143,18 +138,18 @@ export default function LandingPage() {
 
         .main-headline {
           font-family: 'Fraunces', serif;
-          font-size: 36px; font-weight: 500;
-          color: #1A3D2B; line-height: 1.25;
-          margin-bottom: 16px; letter-spacing: -0.5px;
+          font-size: 48px; font-weight: 600;
+          color: #1A3D2B; line-height: 1.15;
+          margin-bottom: 20px; letter-spacing: -0.5px;
         }
-        .main-headline em { font-style: italic; color: #5A9E78; }
+        .main-headline em { font-style: italic; color: #5A9E78; font-weight: 700; }
 
         .tagline {
-          font-size: 13.5px; color: #4A7060;
-          line-height: 1.75; max-width: 280px;
-          margin-bottom: 32px;
+          font-size: 16px; color: #4A7060;
+          line-height: 1.65; max-width: 420px;
+          margin-bottom: 36px; font-weight: 400;
         }
-        .tagline strong { color: #1A3D2B; font-weight: 500; }
+        .tagline strong { color: #1A3D2B; font-weight: 600; }
 
         .feat-list { display: flex; flex-direction: column; gap: 11px; }
         .feat-item {
@@ -171,10 +166,10 @@ export default function LandingPage() {
         /* ── RIGHT COLUMN ── */
         .right-col {
           flex: 1;
-          padding: 75px 52px 48px 44px;
+          padding: 80px 8% 40px 4%;
           display: flex; flex-direction: column;
           justify-content: center;
-          gap: 26px;
+          gap: 32px;
           position: relative; z-index: 2;
         }
 
@@ -249,7 +244,7 @@ export default function LandingPage() {
           .left-col { width: 100%; padding: 36px 28px 28px; }
           .right-col { padding: 24px 28px 40px; }
         }
-      `}</style>
+      `}} />
 
       <div className="page">
         <div className="diag-bg" />
@@ -258,8 +253,8 @@ export default function LandingPage() {
         <nav className="navbar">
           <Link href="/about" className="nav-pill">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
-              <circle cx="12" cy="8" r="4"/>
-              <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/>
+              <circle cx="12" cy="8" r="4" />
+              <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" />
             </svg>
             About & Team
           </Link>

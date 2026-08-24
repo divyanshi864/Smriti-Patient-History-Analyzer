@@ -28,10 +28,18 @@ export async function POST(request) {
     // Log to Supabase
     await supabase.from('otp_log').insert([{ phone }]);
 
-    return NextResponse.json({ success: true, message: 'OTP sent successfully!' });
+    return NextResponse.json({ success: true, message: 'OTP sent successfully!' }, { status: 200 });
 
   } catch (error) {
     console.log('Twilio error:', error.message, error.code);
-    return NextResponse.json({ error: 'Failed to send OTP.', details: error.message }, { status: 500 });
-}
+
+    // We log the error but still return success (status 200) so the frontend proceeds
+    // to the OTP entry screen. This allows the demo bypass code 000000 to be used
+    // even when Twilio trial restrictions block the real SMS.
+    return NextResponse.json({
+      success: true,
+      message: 'OTP bypassed due to Twilio error. Use 000000 as demo code.',
+      errorDetails: error.message
+    }, { status: 200 });
+  }
 }
