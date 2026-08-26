@@ -5,7 +5,7 @@ load_dotenv()
 
 client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
 MODEL_FILTER = os.getenv("GROQ_MODEL_FILTER", "openai/gpt-oss-20b")
-MODEL_RECOMMEND = os.getenv("GROQ_MODEL_RECOMMEND", "llama-3.3-70b-versatile")
+MODEL_RECOMMEND = os.getenv("GROQ_MODEL_RECOMMEND", "allam-2-7b")
 
 async def filter_record(record_text: str, symptoms: str) -> str:
     response = await client.chat.completions.create(

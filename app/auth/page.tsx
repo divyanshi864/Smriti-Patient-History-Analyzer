@@ -79,13 +79,19 @@ function AuthForm() {
         const { data, error: err } = await supabase.auth.signUp({ email, password, options: { data: { name, role: 'doctor' } } })
         if (err) throw err
         await supabase.from('user_profiles').insert({ user_id: data.user!.id, name, role: 'doctor', email })
-        setMsg('Account created! Please login.'); setMode('login')
+        setMsg('Account created! Please check your email to verify your account, then login.'); setMode('login')
       } else {
         const { error: err } = await supabase.auth.signInWithPassword({ email, password })
         if (err) throw err
         router.push('/doctor')
       }
-    } catch (e: any) { setError(e.message) }
+    } catch (e: any) {
+      if (e.message.includes('Invalid login credentials')) {
+        setError('Invalid login credentials. Make sure you verified your email address.')
+      } else {
+        setError(e.message)
+      }
+    }
     setLoading(false)
   }
 

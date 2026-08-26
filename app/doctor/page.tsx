@@ -65,10 +65,10 @@ export default function DoctorDashboard() {
       setUser(profile ? { ...profile, id: user.id } : { name: user.email, email: user.email, id: user.id })
       if (profile?.profile_image) setDocImage(profile.profile_image)
 
-      try {
-        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/stats`)
-        if (res.ok) setStats(await res.json())
-      } catch { }
+      fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/stats`)
+        .then(res => res.ok ? res.json() : null)
+        .then(data => data && setStats(data))
+        .catch(() => {})
 
       const docEmail = user.email || profile?.email
       if (docEmail) {

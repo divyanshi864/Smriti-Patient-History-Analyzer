@@ -46,6 +46,9 @@ export default function PatientDetail() {
 
   const [vitals, setVitals] = useState<any[]>([])
   const [simulatingWatch, setSimulatingWatch] = useState(false)
+  const [showManualVitals, setShowManualVitals] = useState(false)
+  const [manualVitals, setManualVitals] = useState({ heart_rate: '', blood_pressure: '', temperature: '', sugar_level: '', weight: '' })
+  const [savingManual, setSavingManual] = useState(false)
 
   // Delete patient
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
@@ -267,24 +270,65 @@ export default function PatientDetail() {
     setSubmitting(false)
   }
 
-  // ── SMARTWATCH SIMULATION ──────────────────────────────────
-  const simulateWearableSync = async () => {
+  // ── REAL SMARTWATCH SYNC via Google Fit ────────────────────
+  const syncGoogleFitData = async () => {
+    if (typeof window === 'undefined') return
     setSimulatingWatch(true)
-    await new Promise(r => setTimeout(r, 1500))
-    const simulated = {
-      patient_id: patientId,
-      blood_pressure: `${110 + Math.floor(Math.random() * 30)}/${70 + Math.floor(Math.random() * 20)}`,
-      heart_rate: String(62 + Math.floor(Math.random() * 30)),
-      temperature: (97.5 + Math.random() * 2).toFixed(1),
-      sugar_level: String(85 + Math.floor(Math.random() * 50)),
-      weight: patient?.weight || '',
-      notes: 'Auto-synced from wearable device',
-      recorded_at: new Date().toISOString()
+    try {
+      // Load Google Identity Services script if not already loaded
+      if (!(window as any).google?.accounts?.oauth2) {
+        await new Promise<void>((resolve, reject) => {
+          const script = document.createElement('script')
+          script.src = 'https://accounts.google.com/gsi/client'
+          script.onload = () => resolve()
+          script.onerror = () => reject(new Error('Failed to load Google Identity Services'))
+          document.head.appendChild(script)
+        })
+      }
+
+      // Request Google Fit OAuth2 access token
+      const accessToken = await new Promise<string>((resolve, reject) => {
+        const tokenClient = (window as any).google.accounts.oauth2.initTokenClient({
+          client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID,
+          scope: [
+            'https://www.googleapis.com/auth/fitness.heart_rate.read',
+            'https://www.googleapis.com/auth/fitness.body.read',
+            'https://www.googleapis.com/auth/fitness.blood_pressure.read',
+            'https://www.googleapis.com/auth/fitness.blood_glucose.read',
+            'https://www.googleapis.com/auth/fitness.body_temperature.read',
+          ].join(' '),
+          callback: (response: any) => {
+            if (response.error) reject(new Error(response.error))
+            else resolve(response.access_token)
+          },
+          error_callback: (err: any) => reject(new Error(err.type || 'OAuth error'))
+        })
+        tokenClient.requestAccessToken({ prompt: 'consent' })
+      })
+
+      // Send token to backend to fetch real vitals from Google Fit
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/vitals/google-fit-sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ patient_id: patientId, access_token: accessToken })
+      })
+
+      if (res.ok) {
+        const data = await res.json()
+        setVitals([data, ...vitals])
+        alert('✅ boAt watch vitals synced from Google Fit!')
+      } else {
+        const err = await res.json()
+        throw new Error(err.detail || 'Sync failed')
+      }
+    } catch (err: any) {
+      console.error('Google Fit sync error:', err)
+      alert(`❌ Sync failed: ${err.message || 'Unknown error'}`)
     }
-    const { data } = await supabase.from('vitals').insert(simulated).select().single()
-    if (data) setVitals([data, ...vitals])
     setSimulatingWatch(false)
   }
+
+
 
   // ── DELETE PATIENT WITH PDF ────────────────────────────────
   const handleDeletePatient = async () => {
@@ -1021,14 +1065,58 @@ export default function PatientDetail() {
                 <div className="bg-white rounded-3xl p-8 shadow-[0_2px_10px_-3px_rgba(6,81,237,0.1)] border border-slate-100/50">
                   <div className="flex flex-col sm:flex-row items-center justify-between mb-8 gap-4">
                     <h2 className="font-bold text-slate-800 text-2xl flex items-center gap-3"><Activity className="text-[#2563EB] w-6 h-6" /> Clinical Vitals Log</h2>
-                    <button onClick={simulateWearableSync} disabled={simulatingWatch}
-                      className="w-full sm:w-auto flex flex-row items-center justify-center gap-2 bg-[#4F46E5] text-white text-[13px] font-bold tracking-wide uppercase px-6 py-3.5 rounded-xl hover:bg-indigo-700 disabled:opacity-50 transition-colors shadow-md shadow-indigo-500/20">
-                      {simulatingWatch ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />Syncing Data...</> : '⌚ Sync Wearable'}
-                    </button>
+                    <div className="flex gap-2 w-full sm:w-auto">
+                      <button onClick={() => setShowManualVitals(v => !v)}
+                        className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-slate-100 text-slate-700 text-[13px] font-bold tracking-wide uppercase px-5 py-3.5 rounded-xl hover:bg-slate-200 transition-colors border border-slate-200">
+                        {showManualVitals ? '✕ Cancel' : '+ Add Manually'}
+                      </button>
+                      <button onClick={syncGoogleFitData} disabled={simulatingWatch}
+                        className="flex-1 sm:flex-none flex flex-row items-center justify-center gap-2 bg-[#4F46E5] text-white text-[13px] font-bold tracking-wide uppercase px-5 py-3.5 rounded-xl hover:bg-indigo-700 disabled:opacity-50 transition-colors shadow-md shadow-indigo-500/20">
+                        {simulatingWatch ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />Syncing...</> : '⌚ boAt Watch'}
+                      </button>
+                    </div>
                   </div>
 
+                  {/* Manual Vitals Entry Form */}
+                  {showManualVitals && (
+                    <div className="mb-6 bg-indigo-50 border-2 border-indigo-100 rounded-2xl p-6">
+                      <h3 className="text-[13px] font-bold text-indigo-700 uppercase tracking-widest mb-4">📋 Manual Entry</h3>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                        {[
+                          { key: 'heart_rate', label: 'Heart Rate', placeholder: 'e.g. 80', suffix: 'bpm' },
+                          { key: 'blood_pressure', label: 'Blood Pressure', placeholder: 'e.g. 120/80', suffix: 'mmHg' },
+                          { key: 'temperature', label: 'Temperature', placeholder: 'e.g. 98.6', suffix: '°F' },
+                          { key: 'sugar_level', label: 'Glucose', placeholder: 'e.g. 95', suffix: 'mg/dL' },
+                          { key: 'weight', label: 'Weight', placeholder: 'e.g. 65', suffix: 'kg' },
+                        ].map(f => (
+                          <div key={f.key}>
+                            <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block mb-1">{f.label}</label>
+                            <div className="flex">
+                              <input type="text" placeholder={f.placeholder}
+                                value={(manualVitals as any)[f.key]}
+                                onChange={e => setManualVitals(prev => ({ ...prev, [f.key]: e.target.value }))}
+                                className="flex-1 min-w-0 border border-indigo-200 rounded-l-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white" />
+                              <span className="bg-indigo-100 border border-l-0 border-indigo-200 rounded-r-lg px-2 py-2 text-[11px] text-indigo-600 font-bold whitespace-nowrap">{f.suffix}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <button disabled={savingManual}
+                        onClick={async () => {
+                          setSavingManual(true)
+                          const payload = { patient_id: patientId, notes: 'Manual entry by doctor', recorded_at: new Date().toISOString(), ...Object.fromEntries(Object.entries(manualVitals).filter(([_, v]) => v !== '')) }
+                          const { data } = await supabase.from('vitals').insert(payload).select().single()
+                          if (data) { setVitals(prev => [data, ...prev]); setManualVitals({ heart_rate: '', blood_pressure: '', temperature: '', sugar_level: '', weight: '' }); setShowManualVitals(false) }
+                          setSavingManual(false)
+                        }}
+                        className="mt-4 bg-indigo-600 text-white text-[13px] font-bold px-6 py-2.5 rounded-xl hover:bg-indigo-700 disabled:opacity-50 transition-colors">
+                        {savingManual ? 'Saving...' : '💾 Save Vitals'}
+                      </button>
+                    </div>
+                  )}
+
                   {vitals.length === 0 ? (
-                    <div className="text-center py-16 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200"><p className="text-4xl mb-4 opacity-50">📊</p><h3 className="text-lg font-bold text-slate-700 mb-1">No vitals logged</h3><p className="text-slate-500 text-sm">Sync wearable above or have the patient input data.</p></div>
+                    <div className="text-center py-16 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200"><p className="text-4xl mb-4 opacity-50">📊</p><h3 className="text-lg font-bold text-slate-700 mb-1">No vitals logged</h3><p className="text-slate-500 text-sm">Click "+ Add Manually" or sync your boAt watch above.</p></div>
                   ) : (
                     <div className="space-y-4">
                       {vitals.map((v, i) => (
@@ -1037,14 +1125,14 @@ export default function PatientDetail() {
 
                           <div className="flex justify-between items-center mb-5 pb-4 border-b border-slate-200/50">
                             <p className="text-[13px] text-slate-800 font-bold">{new Date(v.recorded_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })}</p>
-                            {v.notes && <span className={`text-[10px] uppercase tracking-widest font-bold px-3 py-1.5 rounded bg-white shadow-sm border ${v.notes.includes('wearable') ? 'text-[#4F46E5] border-indigo-100' : 'text-slate-500 border-slate-200'}`}>
-                              {v.notes.includes('wearable') ? '⌚ Device' : 'Manual'}
+                            {v.notes && <span className={`text-[10px] uppercase tracking-widest font-bold px-3 py-1.5 rounded bg-white shadow-sm border ${v.notes.includes('Google Fit') ? 'text-[#4F46E5] border-indigo-100' : v.notes.includes('doctor') ? 'text-emerald-600 border-emerald-100' : 'text-slate-500 border-slate-200'}`}>
+                              {v.notes.includes('Google Fit') ? '⌚ boAt Sync' : v.notes.includes('doctor') ? '✏️ Manual' : 'Entry'}
                             </span>}
                           </div>
 
                           <div className="flex flex-wrap gap-3">
                             {v.blood_pressure && <span className="bg-red-50 text-red-700 text-[13px] font-bold px-4 py-2.5 rounded-xl border border-red-100 flex items-center gap-2"><HeartPulse className="w-4 h-4" /> BP <span className="text-red-900">{v.blood_pressure}</span></span>}
-                            {v.heart_rate && <span className="bg-[#EEF2FF] text-[#4F46E5] text-[13px] font-bold px-4 py-2.5 rounded-xl border border-[#E0E7FF] flex items-center gap-2"><Activity className="w-4 h-4" /> HR <span className="text-[#3730A3]">{v.heart_rate}</span> bmp</span>}
+                            {v.heart_rate && <span className="bg-[#EEF2FF] text-[#4F46E5] text-[13px] font-bold px-4 py-2.5 rounded-xl border border-[#E0E7FF] flex items-center gap-2"><Activity className="w-4 h-4" /> HR <span className="text-[#3730A3]">{v.heart_rate}</span> bpm</span>}
                             {v.sugar_level && <span className="bg-amber-50 text-amber-700 text-[13px] font-bold px-4 py-2.5 rounded-xl border border-amber-200/50 flex items-center gap-2"><Droplets className="w-4 h-4" /> Glucose <span className="text-amber-900">{v.sugar_level}</span></span>}
                             {v.temperature && <span className="bg-sky-50 text-sky-700 text-[13px] font-bold px-4 py-2.5 rounded-xl border border-sky-100 flex items-center gap-2"><Thermometer className="w-4 h-4" /> Temp <span className="text-sky-900">{v.temperature}°F</span></span>}
                             {v.weight && <span className="bg-slate-200 text-slate-700 text-[13px] font-bold px-4 py-2.5 rounded-xl border border-slate-300 flex items-center gap-2"><div className="w-4 h-4 text-slate-500 font-serif font-black text-center leading-none">W</div> <span className="text-slate-900">{v.weight}</span> kg</span>}
