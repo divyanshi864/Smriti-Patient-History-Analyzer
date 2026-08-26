@@ -122,20 +122,21 @@ def update_allergies(patient_id: str, data: AllergyUpdate):
 @app.post("/api/vitals/google-fit-sync")
 async def google_fit_sync(req: GoogleFitSyncRequest):
     """
-    Fetch real vitals from Google Fit (boAt watch → boAt Crest → Google Fit cloud).
-    Uses three-stage heart rate discovery to handle non-standard boAt data source IDs.
+    Fetch real vitals from Google Fit in parallel (boAt watch -> boAt Crest -> Google Fit).
+    Fast, non-blocking single-discovery pass with asyncio.gather.
     """
     import httpx
     import time
+    import asyncio
     from datetime import datetime
     from app.services.db_service import supabase
 
     headers = {"Authorization": f"Bearer {req.access_token}"}
     base_url = "https://www.googleapis.com/fitness/v1/users/me"
 
-    # Last 24 hours
+    # Last 48 hours to account for timezone differences
     end_ms = int(time.time() * 1000)
-    start_ms = end_ms - (24 * 60 * 60 * 1000)
+    start_ms = end_ms - (48 * 60 * 60 * 1000)
     end_ns = end_ms * 1_000_000
     start_ns = start_ms * 1_000_000
     dataset_id = f"{start_ns}-{end_ns}"
@@ -146,167 +147,121 @@ async def google_fit_sync(req: GoogleFitSyncRequest):
         "recorded_at": datetime.utcnow().isoformat()
     }
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
-
-        # ── HEART RATE: 3-stage discovery ─────────────────────────────────────
-        heart_rate_bpm = None
-
-        # Stage 1: List ALL data sources, find any that provide heart_rate.bpm
-        # This catches boAt's dynamic data source ID (not known in advance)
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        # 1. Single fetch for all data sources
+        data_sources = []
         try:
             r = await client.get(f"{base_url}/dataSources", headers=headers)
             if r.status_code == 200:
-                all_sources = r.json().get("dataSource", [])
-                hr_sources = [
-                    s["dataStreamId"] for s in all_sources
-                    if s.get("dataType", {}).get("name") == "com.google.heart_rate.bpm"
-                ]
-                print(f"📡 Found HR data sources: {hr_sources}")
-                # Query each real source, use the most recent point
-                for source_id in hr_sources:
-                    try:
-                        dr = await client.get(
-                            f"{base_url}/dataSources/{source_id}/datasets/{dataset_id}",
-                            headers=headers
-                        )
-                        if dr.status_code == 200:
-                            pts = dr.json().get("point", [])
-                            if pts:
-                                bpm = pts[-1]["value"][0].get("fpVal", 0)
-                                if bpm > 0:
-                                    heart_rate_bpm = int(bpm)
-                                    print(f"✅ HR from source {source_id}: {heart_rate_bpm} bpm")
-                                    break
-                    except Exception:
-                        pass
+                data_sources = r.json().get("dataSource", [])
         except Exception as e:
-            print(f"Data source discovery error: {e}")
+            print(f"⚠️ dataSources fetch error: {e}")
 
-        # Stage 2: If stage 1 found nothing, try the Aggregate API (more reliable)
-        # Aggregates across ALL sources including boAt
-        if heart_rate_bpm is None:
+        # Group sources by keyword
+        hr_sources = [s["dataStreamId"] for s in data_sources if "heart_rate" in s.get("dataType", {}).get("name", "") or "heart_rate" in s.get("dataStreamId", "")]
+        step_sources = [s["dataStreamId"] for s in data_sources if "step" in s.get("dataType", {}).get("name", "").lower() or "step" in s.get("dataStreamId", "").lower()]
+        spo2_sources = [s["dataStreamId"] for s in data_sources if "oxygen_saturation" in s.get("dataType", {}).get("name", "") or "oxygen_saturation" in s.get("dataStreamId", "")]
+
+        print(f"📡 Found HR sources: {hr_sources}")
+        print(f"📡 Found Step sources: {step_sources}")
+
+        # Always include Google Fit standard merged streams
+        default_hr = "derived:com.google.heart_rate.bpm:com.google.android.gms:merge_heart_rate_bpm"
+        default_steps = "derived:com.google.step_count.delta:com.google.android.gms:merge_step_deltas"
+        estimated_steps = "derived:com.google.step_count.delta:com.google.android.gms:estimated_steps"
+        
+        all_hr = list(dict.fromkeys(hr_sources + [default_hr]))
+        all_steps = list(dict.fromkeys(step_sources + [default_steps, estimated_steps]))
+
+        # Async helper to fetch dataset
+        async def fetch_dataset(source_id: str):
             try:
-                agg_body = {
-                    "aggregateBy": [{"dataTypeName": "com.google.heart_rate.bpm"}],
-                    "bucketByTime": {"durationMillis": str(24 * 60 * 60 * 1000)},
-                    "startTimeMillis": str(start_ms),
-                    "endTimeMillis": str(end_ms)
-                }
-                ar = await client.post(
+                res = await client.get(f"{base_url}/dataSources/{source_id}/datasets/{dataset_id}", headers=headers)
+                if res.status_code == 200:
+                    return source_id, res.json().get("point", [])
+            except Exception:
+                pass
+            return source_id, []
+
+        # 2. Fetch all datasets in parallel
+        tasks = [fetch_dataset(src) for src in (all_hr[:4] + all_steps[:6] + spo2_sources[:2])]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # 3. Process Heart Rate
+        for res in results:
+            if isinstance(res, tuple):
+                src_id, pts = res
+                if "heart_rate" in src_id and pts:
+                    val = pts[-1]["value"][0].get("fpVal", 0)
+                    if val > 0:
+                        vitals["heart_rate"] = str(int(val))
+                        print(f"✅ HR: {vitals['heart_rate']} bpm (from {src_id})")
+                        break
+
+        # 4. Process Steps (Max daily total or sum)
+        total_steps = 0
+        for res in results:
+            if isinstance(res, tuple):
+                src_id, pts = res
+                if ("step" in src_id.lower()) and pts:
+                    source_steps = 0
+                    for pt in pts:
+                        for val in pt.get("value", []):
+                            source_steps += int(val.get("intVal", 0) or val.get("fpVal", 0))
+                    if source_steps > total_steps:
+                        total_steps = source_steps
+
+        if total_steps > 0:
+            vitals["steps"] = str(total_steps)
+            print(f"✅ Steps from dataset: {total_steps}")
+        else:
+            # Aggregate fallback for steps
+            try:
+                agg_res = await client.post(
                     f"{base_url}/dataset:aggregate",
                     headers={**headers, "Content-Type": "application/json"},
-                    json=agg_body
+                    json={
+                        "aggregateBy": [{"dataTypeName": "com.google.step_count.delta"}],
+                        "bucketByTime": {"durationMillis": str(24 * 60 * 60 * 1000)},
+                        "startTimeMillis": str(start_ms),
+                        "endTimeMillis": str(end_ms)
+                    }
                 )
-                if ar.status_code == 200:
-                    buckets = ar.json().get("bucket", [])
-                    for bucket in reversed(buckets):
+                if agg_res.status_code == 200:
+                    for bucket in agg_res.json().get("bucket", []):
                         for ds in bucket.get("dataset", []):
-                            pts = ds.get("point", [])
-                            if pts:
-                                val = pts[-1].get("value", [{}])[0]
-                                bpm = val.get("fpVal") or val.get("intVal")
-                                if bpm and float(bpm) > 0:
-                                    heart_rate_bpm = int(float(bpm))
-                                    print(f"✅ HR from Aggregate API: {heart_rate_bpm} bpm")
-                                    break
-                        if heart_rate_bpm:
-                            break
+                            for pt in ds.get("point", []):
+                                for val in pt.get("value", []):
+                                    st = int(val.get("intVal", 0) or val.get("fpVal", 0))
+                                    if st > total_steps:
+                                        total_steps = st
+                    if total_steps > 0:
+                        vitals["steps"] = str(total_steps)
+                        print(f"✅ Steps (Agg): {total_steps}")
             except Exception as e:
-                print(f"Aggregate API error: {e}")
+                print(f"Steps agg error: {e}")
 
-        # Stage 3: Fall back to the standard Google merged derived source
-        if heart_rate_bpm is None:
-            try:
-                r = await client.get(
-                    f"{base_url}/dataSources/derived:com.google.heart_rate.bpm:com.google.android.gms:merge_heart_rate_bpm/datasets/{dataset_id}",
-                    headers=headers
-                )
-                if r.status_code == 200:
-                    pts = r.json().get("point", [])
-                    if pts:
-                        bpm = pts[-1]["value"][0].get("fpVal", 0)
-                        if bpm > 0:
-                            heart_rate_bpm = int(bpm)
-                            print(f"✅ HR from merged derived source: {heart_rate_bpm} bpm")
-            except Exception as e:
-                print(f"Merged HR source error: {e}")
+        # 5. Process SpO2
+        for res in results:
+            if isinstance(res, tuple):
+                src_id, pts = res
+                if "oxygen_saturation" in src_id and pts:
+                    val = pts[-1]["value"][0].get("fpVal", 0)
+                    if 0 < val <= 100:
+                        vitals["spo2"] = str(round(val, 1))
+                        print(f"✅ SpO2: {vitals['spo2']}%")
+                        break
 
-        if heart_rate_bpm:
-            vitals["heart_rate"] = str(heart_rate_bpm)
-        else:
-            print("⚠️ No Heart Rate data found in Google Fit. boAt Crest may not be syncing HR to Google Fit.")
 
-        # ── WEIGHT ────────────────────────────────────────────────────────────
-        try:
-            r = await client.get(
-                f"{base_url}/dataSources/derived:com.google.weight:com.google.android.gms:merge_weight/datasets/{dataset_id}",
-                headers=headers
-            )
-            if r.status_code == 200:
-                pts = r.json().get("point", [])
-                if pts:
-                    weight = pts[-1]["value"][0].get("fpVal", 0)
-                    if weight > 0:
-                        vitals["weight"] = str(round(weight, 1))
-        except Exception as e:
-            print(f"Weight error: {e}")
+    print(f"✅ Final Synced Vitals: {vitals}")
 
-        # ── BLOOD GLUCOSE ─────────────────────────────────────────────────────
-        try:
-            r = await client.get(
-                f"{base_url}/dataSources/derived:com.google.blood_glucose:com.google.android.gms:merged/datasets/{dataset_id}",
-                headers=headers
-            )
-            if r.status_code == 200:
-                pts = r.json().get("point", [])
-                if pts:
-                    glucose = pts[-1]["value"][0].get("fpVal", 0)
-                    if glucose > 0:
-                        vitals["sugar_level"] = str(int(glucose))
-        except Exception as e:
-            print(f"Glucose error: {e}")
-
-        # ── BODY TEMPERATURE ──────────────────────────────────────────────────
-        try:
-            r = await client.get(
-                f"{base_url}/dataSources/derived:com.google.body.temperature:com.google.android.gms:merged/datasets/{dataset_id}",
-                headers=headers
-            )
-            if r.status_code == 200:
-                pts = r.json().get("point", [])
-                if pts:
-                    temp_c = pts[-1]["value"][0].get("fpVal", 0)
-                    if temp_c > 0:
-                        temp_f = round((temp_c * 9 / 5) + 32, 1)
-                        vitals["temperature"] = str(temp_f)
-        except Exception as e:
-            print(f"Temperature error: {e}")
-
-        # ── BLOOD PRESSURE ────────────────────────────────────────────────────
-        try:
-            r = await client.get(
-                f"{base_url}/dataSources/derived:com.google.blood_pressure:com.google.android.gms:merged/datasets/{dataset_id}",
-                headers=headers
-            )
-            if r.status_code == 200:
-                pts = r.json().get("point", [])
-                if pts:
-                    vals = pts[-1].get("value", [])
-                    if len(vals) >= 2:
-                        sys_val = int(vals[0].get("fpVal", 0))
-                        dia_val = int(vals[1].get("fpVal", 0))
-                        if sys_val > 0 and dia_val > 0:
-                            vitals["blood_pressure"] = f"{sys_val}/{dia_val}"
-        except Exception as e:
-            print(f"BP error: {e}")
-
-    print(f"✅ Google Fit synced vitals: {vitals}")
-
-    # Save to Supabase vitals table
+    # Save to Supabase
     result = supabase.table("vitals").insert(vitals).execute()
     if result.data:
         return result.data[0]
     raise HTTPException(status_code=500, detail="Failed to save vitals to database")
+
+
 
 
 

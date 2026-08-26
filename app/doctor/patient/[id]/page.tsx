@@ -275,35 +275,42 @@ export default function PatientDetail() {
     if (typeof window === 'undefined') return
     setSimulatingWatch(true)
     try {
-      // Load Google Identity Services script if not already loaded
+      // Auto-wait if script is still initializing
+      let attempts = 0
+      while (!(window as any).google?.accounts?.oauth2 && attempts < 20) {
+        await new Promise(r => setTimeout(r, 100))
+        attempts++
+      }
+
       if (!(window as any).google?.accounts?.oauth2) {
-        await new Promise<void>((resolve, reject) => {
-          const script = document.createElement('script')
-          script.src = 'https://accounts.google.com/gsi/client'
-          script.onload = () => resolve()
-          script.onerror = () => reject(new Error('Failed to load Google Identity Services'))
-          document.head.appendChild(script)
-        })
+        throw new Error('Google Identity Services failed to load. Please check internet connection.')
       }
 
       // Request Google Fit OAuth2 access token
       const accessToken = await new Promise<string>((resolve, reject) => {
-        const tokenClient = (window as any).google.accounts.oauth2.initTokenClient({
-          client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID,
-          scope: [
-            'https://www.googleapis.com/auth/fitness.heart_rate.read',
-            'https://www.googleapis.com/auth/fitness.body.read',
-            'https://www.googleapis.com/auth/fitness.blood_pressure.read',
-            'https://www.googleapis.com/auth/fitness.blood_glucose.read',
-            'https://www.googleapis.com/auth/fitness.body_temperature.read',
-          ].join(' '),
-          callback: (response: any) => {
-            if (response.error) reject(new Error(response.error))
-            else resolve(response.access_token)
-          },
-          error_callback: (err: any) => reject(new Error(err.type || 'OAuth error'))
-        })
-        tokenClient.requestAccessToken({ prompt: 'consent' })
+        try {
+          const tokenClient = (window as any).google.accounts.oauth2.initTokenClient({
+            client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID,
+            scope: [
+              'https://www.googleapis.com/auth/fitness.heart_rate.read',
+              'https://www.googleapis.com/auth/fitness.body.read',
+              'https://www.googleapis.com/auth/fitness.blood_pressure.read',
+              'https://www.googleapis.com/auth/fitness.blood_glucose.read',
+              'https://www.googleapis.com/auth/fitness.body_temperature.read',
+              'https://www.googleapis.com/auth/fitness.activity.read',
+              'https://www.googleapis.com/auth/fitness.oxygen_saturation.read',
+            ].join(' '),
+            callback: (response: any) => {
+              if (response.error) reject(new Error(response.error_description || response.error))
+              else if (response.access_token) resolve(response.access_token)
+              else reject(new Error('No access token returned'))
+            },
+            error_callback: (err: any) => reject(new Error(err.message || err.type || 'OAuth window closed'))
+          })
+          tokenClient.requestAccessToken({ prompt: '' })
+        } catch (e: any) {
+          reject(e)
+        }
       })
 
       // Send token to backend to fetch real vitals from Google Fit
@@ -323,9 +330,10 @@ export default function PatientDetail() {
       }
     } catch (err: any) {
       console.error('Google Fit sync error:', err)
-      alert(`❌ Sync failed: ${err.message || 'Unknown error'}`)
+      alert(`❌ Sync issue: ${err.message || 'Unknown error'}`)
+    } finally {
+      setSimulatingWatch(false)
     }
-    setSimulatingWatch(false)
   }
 
 
@@ -1136,6 +1144,8 @@ export default function PatientDetail() {
                             {v.sugar_level && <span className="bg-amber-50 text-amber-700 text-[13px] font-bold px-4 py-2.5 rounded-xl border border-amber-200/50 flex items-center gap-2"><Droplets className="w-4 h-4" /> Glucose <span className="text-amber-900">{v.sugar_level}</span></span>}
                             {v.temperature && <span className="bg-sky-50 text-sky-700 text-[13px] font-bold px-4 py-2.5 rounded-xl border border-sky-100 flex items-center gap-2"><Thermometer className="w-4 h-4" /> Temp <span className="text-sky-900">{v.temperature}°F</span></span>}
                             {v.weight && <span className="bg-slate-200 text-slate-700 text-[13px] font-bold px-4 py-2.5 rounded-xl border border-slate-300 flex items-center gap-2"><div className="w-4 h-4 text-slate-500 font-serif font-black text-center leading-none">W</div> <span className="text-slate-900">{v.weight}</span> kg</span>}
+                            {v.steps && <span className="bg-green-50 text-green-700 text-[13px] font-bold px-4 py-2.5 rounded-xl border border-green-100 flex items-center gap-2"><span className="text-base">👟</span> Steps <span className="text-green-900">{Number(v.steps).toLocaleString()}</span></span>}
+                            {v.spo2 && <span className="bg-cyan-50 text-cyan-700 text-[13px] font-bold px-4 py-2.5 rounded-xl border border-cyan-100 flex items-center gap-2"><span className="text-base">🫁</span> SpO₂ <span className="text-cyan-900">{v.spo2}%</span></span>}
                           </div>
                         </div>
                       ))}
