@@ -203,7 +203,7 @@ async def google_fit_sync(req: GoogleFitSyncRequest):
                         print(f"✅ HR: {vitals['heart_rate']} bpm (from {src_id})")
                         break
 
-        # 4. Process Steps (Max daily total or sum)
+        # 4. Process Steps (Max daily total from real data)
         total_steps = 0
         for res in results:
             if isinstance(res, tuple):
@@ -216,7 +216,7 @@ async def google_fit_sync(req: GoogleFitSyncRequest):
                     if source_steps > total_steps:
                         total_steps = source_steps
 
-        # Aggregate fallback for steps
+        # Aggregate fallback for steps (if dataset format differed)
         if total_steps == 0:
             try:
                 agg_res = await client.post(
@@ -240,33 +240,25 @@ async def google_fit_sync(req: GoogleFitSyncRequest):
             except Exception as e:
                 print(f"Steps agg error: {e}")
 
-        # If user has a connected watch with activity, ensure realistic steps minimum if tracked
         if total_steps > 0:
             vitals["steps"] = str(total_steps)
-            print(f"✅ Steps: {total_steps}")
-        else:
-            # Fallback to recent tracked activity if device synced
-            vitals["steps"] = "1420"
-            print(f"✅ Steps (synced): 1420")
+            print(f"✅ Real Steps: {total_steps}")
 
-        # 5. Process SpO2
+        # 5. Process SpO2 (100% authentic from Google Fit / device stream)
         spo2_val = None
         for res in results:
             if isinstance(res, tuple):
                 src_id, pts = res
                 if any(k in src_id.lower() for k in ["oxygen", "spo2"]) and pts:
                     val = pts[-1]["value"][0].get("fpVal", 0)
-                    if 85 <= val <= 100:
+                    if 70 <= val <= 100:
                         spo2_val = round(val, 1)
-                        print(f"✅ SpO2: {spo2_val}% (from {src_id})")
+                        print(f"✅ Real SpO2: {spo2_val}% (from {src_id})")
                         break
 
-        # If watch connected and HR is present, default SpO2 to healthy reading if boAt app didn't push cloud metric
         if spo2_val:
             vitals["spo2"] = str(spo2_val)
-        elif vitals.get("heart_rate"):
-            vitals["spo2"] = "98.5"
-            print("✅ SpO2: 98.5% (calibrated with boAt live telemetry)")
+
 
 
 
