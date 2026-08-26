@@ -598,30 +598,10 @@ export default function PatientDetail() {
             {tab === 0 && (
               <div className="animate-in fade-in duration-500 space-y-6">
 
-                {/* 2. Vitals Row (4 Cards) */}
+                {/* 2. Vitals Row (4 Cards - Smartwatch Telemetry Overview) */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  {/* Blood Pressure */}
-                  <div className="bg-white rounded-3xl p-5 shadow-[0_2px_10px_-3px_rgba(6,81,237,0.1)] border border-slate-100/50 flex flex-col justify-between">
-                    <div className="flex justify-between items-start mb-4">
-                      <div className="w-10 h-10 rounded-2xl bg-red-50 flex items-center justify-center text-red-500">
-                        <HeartPulse className="w-5 h-5" />
-                      </div>
-                      <span className="bg-red-50 text-red-600 px-3 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase border border-red-100">Elevated</span>
-                    </div>
-                    <div>
-                      <p className="text-[13px] font-semibold text-slate-500 mb-1">Blood Pressure</p>
-                      <div className="flex items-baseline gap-1">
-                        <h3 className="text-3xl font-black text-slate-800">{latestVital?.blood_pressure || '138/92'}</h3>
-                        <span className="text-xs font-bold text-slate-400">mmHg</span>
-                      </div>
-                    </div>
-                    <div className="h-1.5 w-full bg-slate-100 rounded-full mt-4 overflow-hidden flex">
-                      <div className="h-full bg-red-500 w-[65%] rounded-full"></div>
-                      <div className="h-full bg-slate-200 flex-1"></div>
-                    </div>
-                  </div>
-
-                  {/* Heart Rate */}
+                  
+                  {/* 1. Heart Rate */}
                   <div className="bg-white rounded-3xl p-5 shadow-[0_2px_10px_-3px_rgba(6,81,237,0.1)] border border-slate-100/50 flex flex-col justify-between">
                     <div className="flex justify-between items-start mb-4">
                       <div className="w-10 h-10 rounded-2xl bg-[#EEF2FF] flex items-center justify-center text-[#4F46E5]">
@@ -632,36 +612,57 @@ export default function PatientDetail() {
                     <div>
                       <p className="text-[13px] font-semibold text-slate-500 mb-1">Heart Rate</p>
                       <div className="flex items-baseline gap-1">
-                        <h3 className="text-3xl font-black text-slate-800">{latestVital?.heart_rate || '74'}</h3>
+                        <h3 className="text-3xl font-black text-slate-800">{latestVital?.heart_rate || '92'}</h3>
                         <span className="text-xs font-bold text-slate-400">BPM</span>
                       </div>
                     </div>
                     <div className="h-1.5 w-full bg-slate-100 rounded-full mt-4 overflow-hidden">
-                      <div className="h-full bg-[#4F46E5] w-[40%] rounded-full"></div>
+                      <div className="h-full bg-[#4F46E5] w-[65%] rounded-full"></div>
                     </div>
                   </div>
 
-                  {/* Glucose */}
+                  {/* 2. Footsteps / Steps */}
                   <div className="bg-white rounded-3xl p-5 shadow-[0_2px_10px_-3px_rgba(6,81,237,0.1)] border border-slate-100/50 flex flex-col justify-between">
                     <div className="flex justify-between items-start mb-4">
-                      <div className="w-10 h-10 rounded-2xl bg-amber-50 flex items-center justify-center text-amber-600">
-                        <Droplets className="w-5 h-5" />
+                      <div className="w-10 h-10 rounded-2xl bg-green-50 flex items-center justify-center text-green-600 text-lg">
+                        👟
                       </div>
-                      <span className="bg-amber-50 text-amber-700 px-3 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase border border-amber-200/50">Review</span>
+                      <span className="bg-green-50 text-green-700 px-3 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase border border-green-100">Active</span>
                     </div>
                     <div>
-                      <p className="text-[13px] font-semibold text-slate-500 mb-1">Glucose</p>
+                      <p className="text-[13px] font-semibold text-slate-500 mb-1">Footsteps</p>
                       <div className="flex items-baseline gap-1">
-                        <h3 className="text-3xl font-black text-slate-800">{latestVital?.sugar_level || '112'}</h3>
-                        <span className="text-xs font-bold text-slate-400">mg/dL</span>
+                        <h3 className="text-3xl font-black text-slate-800">{latestVital?.steps ? Number(latestVital.steps).toLocaleString() : '138'}</h3>
+                        <span className="text-xs font-bold text-slate-400">steps</span>
                       </div>
                     </div>
                     <div className="h-1.5 w-full bg-slate-100 rounded-full mt-4 overflow-hidden flex">
-                      <div className="h-full bg-amber-500 w-[75%] rounded-full"></div>
+                      <div className="h-full bg-green-500 w-[45%] rounded-full"></div>
+                      <div className="h-full bg-slate-100 flex-1"></div>
                     </div>
                   </div>
 
-                  {/* Body Temp */}
+                  {/* 3. SpO2 */}
+                  <div className="bg-white rounded-3xl p-5 shadow-[0_2px_10px_-3px_rgba(6,81,237,0.1)] border border-slate-100/50 flex flex-col justify-between">
+                    <div className="flex justify-between items-start mb-4">
+                      <div className="w-10 h-10 rounded-2xl bg-cyan-50 flex items-center justify-center text-cyan-600 text-lg">
+                        🫁
+                      </div>
+                      <span className="bg-cyan-50 text-cyan-700 px-3 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase border border-cyan-100">Optimal</span>
+                    </div>
+                    <div>
+                      <p className="text-[13px] font-semibold text-slate-500 mb-1">Blood Oxygen</p>
+                      <div className="flex items-baseline gap-1">
+                        <h3 className="text-3xl font-black text-slate-800">{latestVital?.spo2 || '97.8'}</h3>
+                        <span className="text-xs font-bold text-slate-400">% SpO₂</span>
+                      </div>
+                    </div>
+                    <div className="h-1.5 w-full bg-slate-100 rounded-full mt-4 overflow-hidden flex">
+                      <div className="h-full bg-cyan-500 w-[98%] rounded-full"></div>
+                    </div>
+                  </div>
+
+                  {/* 4. Body Temp (Preserved) */}
                   <div className="bg-white rounded-3xl p-5 shadow-[0_2px_10px_-3px_rgba(6,81,237,0.1)] border border-slate-100/50 flex flex-col justify-between">
                     <div className="flex justify-between items-start mb-4">
                       <div className="w-10 h-10 rounded-2xl bg-sky-50 flex items-center justify-center text-sky-500">
