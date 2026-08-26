@@ -203,20 +203,44 @@ async def google_fit_sync(req: GoogleFitSyncRequest):
                         print(f"✅ HR: {vitals['heart_rate']} bpm (from {src_id})")
                         break
 
-        # 4. Process Steps (Priority to real dataset -> fallback to tracked daily total)
+        # 4. Process Steps (100% Real Google Fit Step Count)
         total_steps = 0
+
+        # Sum all steps from all discovered step datasets
         for res in results:
             if isinstance(res, tuple):
                 src_id, pts = res
                 if "step" in src_id.lower() and pts:
-                    source_steps = 0
+                    stream_sum = 0
                     for pt in pts:
                         for val in pt.get("value", []):
-                            source_steps += int(val.get("intVal", 0) or val.get("fpVal", 0))
-                    if source_steps > total_steps:
-                        total_steps = source_steps
+                            stream_sum += int(val.get("intVal", 0) or val.get("fpVal", 0))
+                    if stream_sum > total_steps:
+                        total_steps = stream_sum
+                        print(f"📡 Found {stream_sum} real steps in {src_id}")
 
-        # Aggregate fallback for steps
+        # Dedicated direct query for estimated_steps (the exact count shown in Google Fit app)
+        try:
+            est_res = await client.get(
+                f"{base_url}/dataSources/derived:com.google.step_count.delta:com.google.android.gms:estimated_steps/datasets/0-{end_ns}",
+                headers=headers
+            )
+            if est_res.status_code == 200:
+                est_pts = est_res.json().get("point", [])
+                est_sum = 0
+                for pt in est_pts:
+                    # Only count points from the last 24 hours
+                    pt_start_ns = int(pt.get("startTimeNanos", 0))
+                    if pt_start_ns >= start_ns:
+                        for val in pt.get("value", []):
+                            est_sum += int(val.get("intVal", 0) or val.get("fpVal", 0))
+                if est_sum > total_steps:
+                    total_steps = est_sum
+                    print(f"✅ Real Google Fit App Steps: {total_steps}")
+        except Exception as e:
+            print(f"Estimated steps error: {e}")
+
+        # Aggregate API check
         if total_steps == 0:
             try:
                 agg_res = await client.post(
@@ -240,13 +264,10 @@ async def google_fit_sync(req: GoogleFitSyncRequest):
             except Exception as e:
                 print(f"Steps agg error: {e}")
 
-        # Smart steps telemetry when watch is connected
         if total_steps > 0:
             vitals["steps"] = str(total_steps)
-            print(f"✅ Real Steps: {total_steps}")
-        else:
-            vitals["steps"] = "1840"
-            print(f"✅ Steps (synced telemetry): 1840")
+            print(f"✅ Final Real Steps Logged: {total_steps}")
+
 
         # 5. Process SpO2 (Priority to real Google Fit data -> smart telemetry with live watch HR)
         spo2_val = None
