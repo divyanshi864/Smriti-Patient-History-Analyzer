@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
+import Script from 'next/script'
 import { supabase } from '@/lib/supabase'
 import { useDropzone } from 'react-dropzone'
 import {
@@ -109,6 +110,8 @@ export default function PatientDashboard() {
   const [savingAllergy, setSavingAllergy] = useState(false)
   const [allergyMsg, setAllergyMsg] = useState('')
   const [updatingGender, setUpdatingGender] = useState(false)
+  const [syncingWatch, setSyncingWatch] = useState(false)
+  const [syncMsg, setSyncMsg] = useState('')
 
   const t = (key: string) => isHindi && HINDI[key] ? HINDI[key] : key
 
@@ -228,6 +231,66 @@ export default function PatientDashboard() {
     }).select().single()
     if (data) { setVitals([data, ...vitals]); setVitalForm({ blood_pressure: '', sugar_level: '', temperature: '', weight: '', heart_rate: '', notes: '' }) }
     setSavingVital(false)
+  }
+
+  const syncGoogleFitData = async () => {
+    if (!user?.patient_id) return
+    setSyncingWatch(true)
+    setSyncMsg('')
+    try {
+      if (typeof window === 'undefined' || !(window as any).google?.accounts?.oauth2) {
+        alert('Google Identity Services loading... please try again in a few seconds.')
+        setSyncingWatch(false)
+        return
+      }
+
+      const client = (window as any).google.accounts.oauth2.initTokenClient({
+        client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID,
+        scope: [
+          'https://www.googleapis.com/auth/fitness.heart_rate.read',
+          'https://www.googleapis.com/auth/fitness.body.read',
+          'https://www.googleapis.com/auth/fitness.blood_pressure.read',
+          'https://www.googleapis.com/auth/fitness.blood_glucose.read',
+          'https://www.googleapis.com/auth/fitness.body_temperature.read',
+          'https://www.googleapis.com/auth/fitness.activity.read',
+          'https://www.googleapis.com/auth/fitness.oxygen_saturation.read',
+        ].join(' '),
+        callback: async (tokenResponse: any) => {
+          if (tokenResponse && tokenResponse.access_token) {
+            try {
+              const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/vitals/google-fit-sync`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  patient_id: user.patient_id,
+                  access_token: tokenResponse.access_token
+                })
+              })
+              if (res.ok) {
+                const data = await res.json()
+                setVitals((prev: any[]) => [data, ...prev])
+                setSyncMsg('✅ Smartwatch data synced successfully!')
+                setTimeout(() => setSyncMsg(''), 4000)
+              } else {
+                setSyncMsg('⚠️ Sync completed with no new data points')
+                setTimeout(() => setSyncMsg(''), 4000)
+              }
+            } catch {
+              setSyncMsg('❌ Failed to connect to backend sync server')
+              setTimeout(() => setSyncMsg(''), 4000)
+            }
+          }
+          setSyncingWatch(false)
+        },
+        error_callback: () => {
+          setSyncingWatch(false)
+        }
+      })
+      client.requestAccessToken({ prompt: 'select_account' })
+    } catch (err) {
+      console.error(err)
+      setSyncingWatch(false)
+    }
   }
 
   const saveEmergencyContact = async () => {
@@ -723,8 +786,60 @@ export default function PatientDashboard() {
           {/* Tab 3: Vitals */}
           {activeTab === 3 && (
             <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 max-w-5xl">
-              <h1 style={{ fontSize: '32px', fontWeight: '800', color: '#1E293B', marginBottom: '32px' }}>Vitals & Health Metrics</h1>
+              <Script src="https://accounts.google.com/gsi/client" strategy="afterInteractive" />
+              
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+                <div>
+                  <h1 style={{ fontSize: '32px', fontWeight: '800', color: '#1E293B', margin: 0 }}>Vitals & Health Metrics</h1>
+                  <p className="text-sm font-medium text-slate-500 mt-1">Live wearable telemetry and clinical health logs</p>
+                </div>
+              </div>
 
+              {/* ⌚ 1. Smartwatch Live Telemetry Card (Google Fit / boAt) */}
+              <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 rounded-[28px] p-7 text-white shadow-xl shadow-slate-900/10 mb-8 border border-slate-700/50 relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-80 h-80 bg-blue-500/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 relative z-10">
+                  <div className="flex items-start gap-4">
+                    <div className="w-14 h-14 rounded-2xl bg-white/10 border border-white/10 backdrop-blur-md flex items-center justify-center text-3xl shadow-inner flex-shrink-0">
+                      ⌚
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                        <span className="text-[11px] font-black uppercase tracking-wider text-emerald-400">Live Telemetry</span>
+                      </div>
+                      <h3 className="text-xl font-black text-white">boAt Smartwatch & Google Fit Sync</h3>
+                      <p className="text-xs text-slate-300 font-medium mt-1 max-w-lg">
+                        Pull real-time Heart Rate, Footsteps, and Blood Oxygen (SpO₂) directly from your boAt watch or Google Fit account.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={syncGoogleFitData}
+                    disabled={syncingWatch}
+                    className="px-6 py-3.5 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-sm shadow-lg shadow-blue-500/30 flex items-center justify-center gap-2.5 transition-all duration-200 active:scale-95 flex-shrink-0 disabled:opacity-50"
+                  >
+                    {syncingWatch ? (
+                      <>
+                        <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                        <span>Connecting to boAt...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>⌚</span>
+                        <span>Sync boAt Watch Now</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+                {syncMsg && (
+                  <div className="mt-4 pt-4 border-t border-white/10 text-xs font-bold text-emerald-300 flex items-center gap-2">
+                    {syncMsg}
+                  </div>
+                )}
+              </div>
+
+              {/* 2. Manual Metric Logging */}
               <div style={{ padding: '32px', borderRadius: '28px', backgroundColor: 'rgba(255, 255, 255, 0.8)', border: '1px solid rgba(255, 255, 255, 0.9)', boxShadow: '0 10px 30px -10px rgba(0, 102, 132, 0.08)', backdropFilter: 'blur(20px)', marginBottom: '40px' }}>
                 <h2 style={{ fontSize: '20px', fontWeight: '800', color: '#1E293B', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '12px' }}>
                   <div style={{ width: '40px', height: '40px', borderRadius: '12px', backgroundColor: '#E0F2FE', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#006684' }}><Activity size={20} /></div>
@@ -740,7 +855,7 @@ export default function PatientDashboard() {
                     { key: 'notes', label: 'Daily Note', placeholder: 'How are you feeling?', icon: <FileText size={16} /> },
                   ].map(f => (
                     <div key={f.key}>
-                      <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>{f.icon} {f.label}</label>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: '700', color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>{f.icon} {f.label}</label>
                       <input value={(vitalForm as any)[f.key]} onChange={e => setVitalForm({ ...vitalForm, [f.key]: e.target.value })} placeholder={f.placeholder} style={{ width: '100%', padding: '14px 18px', borderRadius: '14px', border: '1px solid #E2E8F0', outline: 'none', fontSize: '14px', background: 'white' }} />
                     </div>
                   ))}
@@ -748,14 +863,31 @@ export default function PatientDashboard() {
                 <button onClick={saveVitals} disabled={savingVital} style={{ backgroundColor: '#006684', color: 'white', padding: '14px 32px', borderRadius: '16px', fontWeight: '800', border: 'none', cursor: 'pointer', opacity: savingVital ? 0.5 : 1 }}>{savingVital ? 'Saving...' : 'Save Health Record'}</button>
               </div>
 
+              {/* 3. Historical Trends */}
               {vitals.length > 0 && (
                 <div>
                   <h2 style={{ fontSize: '22px', fontWeight: '800', color: '#1E293B', marginBottom: '24px' }}>Historical Trends</h2>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                     {vitals.map((v, i) => (
                       <div key={i} style={{ padding: '24px 32px', borderRadius: '28px', backgroundColor: 'white', border: '1px solid #F1F5F9', transition: 'all 0.3s' }}>
-                        <p style={{ fontSize: '11px', fontWeight: '800', color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '16px' }}>{new Date(v.recorded_at).toLocaleString('en-GB')}</p>
+                        <div className="flex items-center justify-between mb-4">
+                          <p style={{ fontSize: '11px', fontWeight: '800', color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.05em', margin: 0 }}>
+                            {new Date(v.recorded_at).toLocaleString('en-GB')}
+                          </p>
+                          {v.notes?.includes('Google Fit') || v.notes?.includes('boAt') ? (
+                            <span className="bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-[10px] font-black tracking-wider uppercase border border-blue-100 flex items-center gap-1">
+                              ⌚ boAt Sync
+                            </span>
+                          ) : (
+                            <span className="bg-slate-100 text-slate-600 px-3 py-1 rounded-full text-[10px] font-black tracking-wider uppercase border border-slate-200">
+                              Manual Log
+                            </span>
+                          )}
+                        </div>
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
+                          {v.heart_rate && <span style={{ backgroundColor: '#EEF2FF', color: '#4F46E5', padding: '6px 16px', borderRadius: '9999px', fontSize: '12px', fontWeight: '800' }}>❤️ HR: {v.heart_rate} bpm</span>}
+                          {v.steps && <span style={{ backgroundColor: '#F0FDF4', color: '#16A34A', padding: '6px 16px', borderRadius: '9999px', fontSize: '12px', fontWeight: '800' }}>👟 {Number(v.steps).toLocaleString()} steps</span>}
+                          {v.spo2 && <span style={{ backgroundColor: '#ECFEFF', color: '#0891B2', padding: '6px 16px', borderRadius: '9999px', fontSize: '12px', fontWeight: '800' }}>🫁 SpO₂: {v.spo2}%</span>}
                           {v.blood_pressure && <span style={{ backgroundColor: '#FEF2F2', color: '#DC2626', padding: '6px 16px', borderRadius: '9999px', fontSize: '12px', fontWeight: '800' }}>BP: {v.blood_pressure}</span>}
                           {v.sugar_level && <span style={{ backgroundColor: '#FEF3C7', color: '#D97706', padding: '6px 16px', borderRadius: '9999px', fontSize: '12px', fontWeight: '800' }}>Sugar: {v.sugar_level}</span>}
                           {v.temperature && <span style={{ backgroundColor: '#E0F2FE', color: '#0284C7', padding: '6px 16px', borderRadius: '9999px', fontSize: '12px', fontWeight: '800' }}>Temp: {v.temperature}°</span>}

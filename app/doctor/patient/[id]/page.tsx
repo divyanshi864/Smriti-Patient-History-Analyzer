@@ -24,6 +24,7 @@ export default function PatientDetail() {
 
   const [manualNote, setManualNote] = useState('')
   const [manualHistory, setManualHistory] = useState<any[]>([])
+  const [documents, setDocuments] = useState<any[]>([])
   const [savingNote, setSavingNote] = useState(false)
 
   const [symptoms, setSymptoms] = useState('')
@@ -54,6 +55,7 @@ export default function PatientDetail() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [deleteMsg, setDeleteMsg] = useState('')
+  const [liveAlert, setLiveAlert] = useState('')
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const docFileInputRef = useRef<HTMLInputElement>(null)
@@ -174,9 +176,32 @@ export default function PatientDetail() {
       setPrescriptions(rx || [])
       const { data: vt } = await supabase.from('vitals').select('*').eq('patient_id', patientId).order('recorded_at', { ascending: false })
       setVitals(vt || [])
+      const { data: docs } = await supabase.from('documents').select('*').eq('patient_id', patientId).order('created_at', { ascending: false })
+      setDocuments(docs || [])
       setLoading(false)
     }
     init()
+
+    // 🔴 Supabase Realtime WebSockets Listener for Live Patient Vitals
+    const channel = supabase
+      .channel(`realtime-vitals-doctor-${patientId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'vitals', filter: `patient_id=eq.${patientId}` },
+        (payload: any) => {
+          console.log('🔴 Realtime Vital Received:', payload.new)
+          if (payload.new) {
+            setVitals((prev: any[]) => [payload.new, ...prev])
+            setLiveAlert(`🔴 Live Vitals Synced: ${payload.new.notes || 'New Reading'}`)
+            setTimeout(() => setLiveAlert(''), 6000)
+          }
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
   }, [patientId])
 
   useEffect(() => { if (aiResult && tab === 3) fetchAiMeds() }, [aiResult, tab])
@@ -236,7 +261,12 @@ export default function PatientDetail() {
         body: JSON.stringify({ patient_id: patientId, symptoms })
       })
       if (!res.ok) throw new Error()
-      setAiResult(await res.json())
+      const data = await res.json()
+      setAiResult(data)
+
+      // Instantly refresh doctor_notes so the timeline in Full Medical Record shows the new analysis immediately
+      const { data: updatedNotes } = await supabase.from('doctor_notes').select('*').eq('patient_id', patientId).order('created_at', { ascending: false })
+      if (updatedNotes) setManualHistory(updatedNotes)
     } catch { setAiError('Could not connect to AI backend. Make sure uvicorn is running.') }
     setAnalyzing(false)
   }
@@ -307,7 +337,7 @@ export default function PatientDetail() {
             },
             error_callback: (err: any) => reject(new Error(err.message || err.type || 'OAuth window closed'))
           })
-          tokenClient.requestAccessToken({ prompt: '' })
+          tokenClient.requestAccessToken({ prompt: 'select_account' })
         } catch (e: any) {
           reject(e)
         }
@@ -534,6 +564,17 @@ export default function PatientDetail() {
         <div className="flex-1 overflow-y-auto w-full">
           <div className="max-w-[1400px] mx-auto p-4 md:p-8 pb-24">
 
+            {/* 🔴 Real-Time Vitals Alert Banner */}
+            {liveAlert && (
+              <div className="mb-6 p-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-bold text-sm shadow-lg shadow-emerald-500/20 flex items-center justify-between animate-in slide-in-from-top-2 duration-300">
+                <div className="flex items-center gap-3">
+                  <span className="w-3 h-3 rounded-full bg-white animate-ping"></span>
+                  <span>{liveAlert}</span>
+                </div>
+                <span className="text-[11px] bg-white/20 px-3 py-1 rounded-full uppercase tracking-wider">Live WebSocket</span>
+              </div>
+            )}
+
             {/* 1. Patient Profile Header Card (Persistent across tabs) */}
             <div className="bg-white rounded-3xl p-6 shadow-[0_2px_10px_-3px_rgba(6,81,237,0.1)] border border-slate-100/50 flex flex-col md:flex-row items-start md:items-center justify-between gap-6 mb-8">
               <div className="flex flex-col sm:flex-row items-center sm:items-start gap-6 relative w-full md:w-auto text-center sm:text-left">
@@ -595,7 +636,12 @@ export default function PatientDetail() {
             </div>
 
             {/* 🔴 TAB 0: OVERVIEW (THE DASHBOARD DESIGN) */}
-            {tab === 0 && (
+            {tab === 0 && (() => {
+              const latestRecordedSteps = vitals.find((v: any) => v.steps && Number(v.steps) > 0)?.steps
+              const latestRecordedHR = vitals.find((v: any) => v.heart_rate && Number(v.heart_rate) > 0)?.heart_rate
+              const latestRecordedSpo2 = vitals.find((v: any) => v.spo2 && Number(v.spo2) > 0)?.spo2
+
+              return (
               <div className="animate-in fade-in duration-500 space-y-6">
 
                 {/* 2. Vitals Row (4 Cards - Smartwatch Telemetry Overview) */}
@@ -612,7 +658,7 @@ export default function PatientDetail() {
                     <div>
                       <p className="text-[13px] font-semibold text-slate-500 mb-1">Heart Rate</p>
                       <div className="flex items-baseline gap-1">
-                        <h3 className="text-3xl font-black text-slate-800">{latestVital?.heart_rate || '92'}</h3>
+                        <h3 className="text-3xl font-black text-slate-800">{latestRecordedHR || latestVital?.heart_rate || '92'}</h3>
                         <span className="text-xs font-bold text-slate-400">BPM</span>
                       </div>
                     </div>
@@ -632,7 +678,7 @@ export default function PatientDetail() {
                     <div>
                       <p className="text-[13px] font-semibold text-slate-500 mb-1">Footsteps</p>
                       <div className="flex items-baseline gap-1">
-                        <h3 className="text-3xl font-black text-slate-800">{latestVital?.steps ? Number(latestVital.steps).toLocaleString() : '138'}</h3>
+                        <h3 className="text-3xl font-black text-slate-800">{latestRecordedSteps ? Number(latestRecordedSteps).toLocaleString() : (latestVital?.steps ? Number(latestVital.steps).toLocaleString() : '138')}</h3>
                         <span className="text-xs font-bold text-slate-400">steps</span>
                       </div>
                     </div>
@@ -677,8 +723,9 @@ export default function PatientDetail() {
                         <span className="text-xs font-bold text-slate-400">°F</span>
                       </div>
                     </div>
-                    <div className="h-1.5 w-full bg-slate-100 rounded-full mt-4 overflow-hidden">
-                      <div className="h-full bg-sky-400 w-[50%] rounded-full"></div>
+                    <div className="h-1.5 w-full bg-slate-100 rounded-full mt-4 overflow-hidden flex">
+                      <div className="h-full bg-sky-500 w-[70%] rounded-full"></div>
+                      <div className="h-full bg-slate-100 flex-1"></div>
                     </div>
                   </div>
                 </div>
@@ -707,71 +754,243 @@ export default function PatientDetail() {
 
                     {/* Full Medical Record Timeline */}
                     <div className="bg-white rounded-3xl p-6 shadow-[0_2px_10px_-3px_rgba(6,81,237,0.1)] border border-slate-100/50">
-                      <div className="flex justify-between items-center mb-8 border-b border-slate-100 pb-4">
-                        <h2 className="font-bold text-slate-800 text-xl">Full Medical Record</h2>
+                      <div className="flex justify-between items-center mb-6 border-b border-slate-100 pb-4">
+                        <div>
+                          <h2 className="font-bold text-slate-800 text-xl flex items-center gap-2">
+                            Full Medical Record
+                            <span className="text-xs bg-blue-50 text-[#2563EB] px-2.5 py-0.5 rounded-full font-bold border border-blue-100">
+                              {[...manualHistory, ...documents].length} Events
+                            </span>
+                          </h2>
+                          <p className="text-xs text-slate-400 font-medium mt-0.5">Chronological history of AI analyses, clinical notes, prescriptions & OCR uploads</p>
+                        </div>
                         <div className="flex gap-2">
                           <button onClick={handleDeletePatient} className="text-slate-500 hover:text-[#2563EB] flex items-center gap-1.5 text-xs font-bold transition-colors bg-slate-50 hover:bg-blue-50 px-3 py-2 rounded-lg border border-slate-200">
                             <Download className="w-3.5 h-3.5" /> Export PDF
                           </button>
-                          <button className="text-slate-500 hover:text-slate-800 flex items-center gap-1.5 text-xs font-bold transition-colors bg-slate-50 hover:bg-slate-100 px-3 py-2 rounded-lg border border-slate-200">
-                            <Printer className="w-3.5 h-3.5" /> Print Note
+                          <button onClick={() => window.print()} className="text-slate-500 hover:text-slate-800 flex items-center gap-1.5 text-xs font-bold transition-colors bg-slate-50 hover:bg-slate-100 px-3 py-2 rounded-lg border border-slate-200">
+                            <Printer className="w-3.5 h-3.5" /> Print
                           </button>
                         </div>
                       </div>
 
-                      <div className="relative pl-4 space-y-8 before:absolute before:inset-0 before:ml-[23px] before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-slate-200 before:via-slate-200 before:to-transparent">
+                      {/* Unified Chronological Timeline */}
+                      <div className="relative pl-2 sm:pl-4 space-y-6 before:absolute before:inset-0 before:left-[19px] sm:before:left-[27px] before:h-full before:w-0.5 before:bg-gradient-to-b before:from-blue-300 before:via-slate-200 before:to-transparent">
+                        {(() => {
+                          const timelineItems: any[] = [
+                            ...manualHistory.map(h => ({
+                              id: `note-${h.id}`,
+                              type: (h.doctor_name === 'AI Clinical Analyzer' || h.note?.startsWith('🤖')) ? 'ai' : h.note?.startsWith('PRESCRIPTION ISSUED:') ? 'rx' : 'note',
+                              date: h.created_at,
+                              doctor: h.doctor_name,
+                              raw: h.note,
+                              file_url: null
+                            })),
+                            ...documents.map(d => ({
+                              id: `doc-${d.id}`,
+                              type: 'doc',
+                              date: d.created_at,
+                              file_url: d.file_url,
+                              raw: d.ocr_text || '',
+                              doctor: null
+                            }))
+                          ].sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-                        {/* Static Example Timeline Item 1 based on Image */}
-                        <div className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group is-active pb-8">
-                          <div className="flex items-center justify-center w-4 h-4 rounded-full border-4 border-white bg-[#2563EB] shadow-sm shrink-0 md:order-1 relative z-10 -ml-[7px]"></div>
-                          <div className="w-[calc(100%-2.5rem)] md:w-[calc(50%-2.5rem)] ml-6 md:ml-0 md:group-odd:-ml-6 md:group-even:-mr-6"></div> {/* Spacer for vertical line alignment */}
-                        </div>
-
-                        <div className="relative z-10 ml-6 pb-2">
-                          <div className="flex justify-between items-start mb-2">
-                            <span className="text-[11px] font-black text-slate-400 tracking-widest uppercase">Oct 14, 2023</span>
-                            <span className="bg-slate-100 text-slate-500 px-2 py-0.5 rounded text-[10px] font-bold tracking-widest border border-slate-200 uppercase">Cardiology</span>
-                          </div>
-                          <h3 className="font-bold text-slate-800 text-lg mb-2">Hypertension Follow-up</h3>
-                          <p className="text-sm text-slate-600 leading-relaxed mb-4">Patient reports mild headache and fatigue in the mornings. Compliant with Lisinopril 10mg daily. Physical exam shows no peripheral edema. Lungs clear to auscultation. S1, S2 regular. Assessment: Stage 1 HTN, stable but slightly elevated.</p>
-                          <div className="flex gap-2">
-                            <span className="bg-slate-100 text-slate-600 px-3 py-1 rounded-full text-[11px] font-semibold border border-slate-200/50">Lisinopril</span>
-                            <span className="bg-slate-100 text-slate-600 px-3 py-1 rounded-full text-[11px] font-semibold border border-slate-200/50">Physical Exam</span>
-                          </div>
-                        </div>
-
-                        {/* Static Example Timeline Item 2 based on Image */}
-                        <div className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group is-active pb-8">
-                          <div className="flex items-center justify-center w-4 h-4 rounded-full border-4 border-white bg-slate-300 shadow-sm shrink-0 md:order-1 relative z-10 -ml-[7px]"></div>
-                          <div className="w-[calc(100%-2.5rem)] md:w-[calc(50%-2.5rem)] ml-6 md:ml-0 md:group-odd:-ml-6 md:group-even:-mr-6"></div>
-                        </div>
-
-                        <div className="relative z-10 ml-6 pb-2">
-                          <div className="flex justify-between items-start mb-2">
-                            <span className="text-[11px] font-black text-slate-400 tracking-widest uppercase">Sep 02, 2023</span>
-                            <span className="bg-slate-100 text-slate-500 px-2 py-0.5 rounded text-[10px] font-bold tracking-widest border border-slate-200 uppercase">Routine</span>
-                          </div>
-                          <h3 className="font-bold text-slate-800 text-lg mb-2">Annual Physical & Blood Panel</h3>
-                          <p className="text-sm text-slate-600 leading-relaxed">Comprehensive metabolic panel and lipid profile ordered. Patient discussed dietary modifications and increased physical activity.</p>
-                        </div>
-
-                        {/* Dynamic Notes Mapping if any */}
-                        {manualHistory.slice(0, 2).map((note, idx) => (
-                          <div key={idx} className="relative mt-8">
-                            <div className="flex items-center justify-center w-4 h-4 rounded-full border-4 border-white bg-slate-300 shadow-sm shrink-0 absolute -left-[7px] z-10"></div>
-                            <div className="ml-6">
-                              <div className="flex justify-between items-start mb-2">
-                                <span className="text-[11px] font-black text-slate-400 tracking-widest uppercase">{new Date(note.created_at).toLocaleDateString()}</span>
-                                <span className="bg-slate-100 text-slate-500 px-2 py-0.5 rounded text-[10px] font-bold tracking-widest border border-slate-200 uppercase">Note</span>
+                          if (timelineItems.length === 0) {
+                            return (
+                              <div className="py-12 text-center text-slate-400">
+                                <p className="text-4xl mb-3">📋</p>
+                                <p className="font-bold text-slate-600 text-sm">No medical records recorded yet</p>
+                                <p className="text-xs text-slate-400 mt-1">Run the AI Analyzer, upload documents, or add clinical notes to see history here.</p>
                               </div>
-                              <h3 className="font-bold text-slate-800 text-lg mb-2">Clinical Note Added</h3>
-                              <p className="text-sm text-slate-600 leading-relaxed">{note.note}</p>
-                            </div>
-                          </div>
-                        ))}
+                            );
+                          }
+
+                          return timelineItems.map((item, idx) => {
+                            const itemDate = new Date(item.date).toLocaleString('en-IN', {
+                              timeZone: 'Asia/Kolkata',
+                              day: 'numeric',
+                              month: 'short',
+                              year: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit'
+                            });
+
+                            // --- 1. AI ANALYZER RUN CARD ---
+                            if (item.type === 'ai') {
+                              const lines = (item.raw || '').split('\n');
+                              let diag = 'AI Emergency Analysis';
+                              let risk = 'MEDIUM';
+                              let conf = '';
+                              let symp = '';
+                              let acts = '';
+                              let meds = '';
+                              let reason = '';
+
+                              lines.forEach((l: string) => {
+                                if (l.startsWith('Diagnosis:')) {
+                                  diag = l.replace('Diagnosis:', '').trim();
+                                  const rMatch = diag.match(/\((CRITICAL|HIGH|MEDIUM|LOW)\s*Risk/i);
+                                  if (rMatch) risk = rMatch[1].toUpperCase();
+                                  const cMatch = diag.match(/(\d+)%\)/);
+                                  if (cMatch) conf = cMatch[1] + '%';
+                                  diag = diag.replace(/\(.*?\)/g, '').trim();
+                                } else if (l.startsWith('Symptoms:')) symp = l.replace('Symptoms:', '').trim();
+                                else if (l.startsWith('Actions:')) acts = l.replace('Actions:', '').trim();
+                                else if (l.startsWith('Suggested Meds:')) meds = l.replace('Suggested Meds:', '').trim();
+                                else if (l.startsWith('Reasoning:')) reason = l.replace('Reasoning:', '').trim();
+                              });
+
+                              const riskBadgeColor = risk === 'CRITICAL' ? 'bg-red-100 text-red-700 border-red-200' :
+                                                    risk === 'HIGH' ? 'bg-orange-100 text-orange-700 border-orange-200' :
+                                                    risk === 'LOW' ? 'bg-emerald-100 text-emerald-700 border-emerald-200' :
+                                                    'bg-yellow-100 text-yellow-800 border-yellow-200';
+
+                              return (
+                                <div key={item.id || idx} className="relative flex items-start gap-4 group">
+                                  <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 border-4 border-white shadow-md flex items-center justify-center text-white shrink-0 z-10 -ml-[13px] sm:-ml-[17px]">
+                                    <Sparkles className="w-4 h-4" />
+                                  </div>
+                                  <div className="flex-1 bg-gradient-to-br from-blue-50/40 via-white to-slate-50 border border-blue-100/80 rounded-2xl p-5 shadow-sm hover:shadow-md transition-shadow">
+                                    <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                                      <div className="flex items-center gap-2">
+                                        <span className="bg-blue-600 text-white text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full tracking-wider shadow-sm">
+                                          🤖 AI Analyzer Report
+                                        </span>
+                                        <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full border ${riskBadgeColor}`}>
+                                          {risk} Risk {conf ? `• ${conf}` : ''}
+                                        </span>
+                                      </div>
+                                      <span className="text-[11px] font-semibold text-slate-400">{itemDate}</span>
+                                    </div>
+                                    <h3 className="text-base font-bold text-slate-900 mb-1">{diag}</h3>
+                                    {symp && (
+                                      <p className="text-xs text-slate-600 mb-3 bg-white/80 p-2.5 rounded-xl border border-slate-200/60">
+                                        <strong className="text-slate-700">Symptoms Analyzed:</strong> {symp}
+                                      </p>
+                                    )}
+                                    {acts && (
+                                      <div className="mb-2">
+                                        <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">Recommended Actions</p>
+                                        <div className="flex flex-wrap gap-1.5">
+                                          {acts.split(',').map((a: string, i: number) => (
+                                            <span key={i} className="text-[11px] font-medium bg-blue-50 text-blue-800 px-2.5 py-1 rounded-lg border border-blue-100">
+                                              ✓ {a.trim()}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
+                                    {meds && meds !== 'None' && (
+                                      <div className="mb-3">
+                                        <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">Suggested Medications</p>
+                                        <div className="flex flex-wrap gap-1.5">
+                                          {meds.split(',').map((m: string, i: number) => (
+                                            <span key={i} className="text-[11px] font-medium bg-emerald-50 text-emerald-800 px-2.5 py-1 rounded-lg border border-emerald-100 flex items-center gap-1">
+                                              💊 {m.trim()}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
+                                    {reason && (
+                                      <p className="text-xs text-slate-500 italic pl-3 border-l-2 border-blue-300 font-medium">
+                                        "{reason}"
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            }
+
+                            // --- 2. OCR MEDICAL DOCUMENT CARD ---
+                            if (item.type === 'doc') {
+                              const ocrPreview = (item.raw || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+                              const firstLines = ocrPreview.split('\n').filter((l: string) => l.trim().length > 0).slice(0, 4).join(' • ');
+
+                              return (
+                                <div key={item.id || idx} className="relative flex items-start gap-4 group">
+                                  <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 border-4 border-white shadow-md flex items-center justify-center text-white shrink-0 z-10 -ml-[13px] sm:-ml-[17px]">
+                                    <Folders className="w-4 h-4" />
+                                  </div>
+                                  <div className="flex-1 bg-white border border-indigo-100 rounded-2xl p-5 shadow-sm hover:shadow-md transition-shadow">
+                                    <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                                      <span className="bg-purple-100 text-purple-700 text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full tracking-wider border border-purple-200">
+                                        📄 Medical Document (OCR Extracted)
+                                      </span>
+                                      <span className="text-[11px] font-semibold text-slate-400">{itemDate}</span>
+                                    </div>
+                                    <h3 className="text-sm font-bold text-slate-800 mb-1">
+                                      {item.file_url ? item.file_url.split('/').pop()?.replace(/^\d+_/, '') : 'Uploaded Clinical Record'}
+                                    </h3>
+                                    {firstLines ? (
+                                      <p className="text-xs text-slate-600 line-clamp-3 mb-3 bg-slate-50 p-2.5 rounded-xl border border-slate-200/50">
+                                        {firstLines}
+                                      </p>
+                                    ) : (
+                                      <p className="text-xs text-slate-400 italic mb-3">Document stored in records.</p>
+                                    )}
+                                    {item.file_url && (
+                                      <a href={item.file_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-xs font-bold text-[#2563EB] hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-lg transition-colors border border-blue-200/50">
+                                        <Download className="w-3.5 h-3.5" /> View Original Document
+                                      </a>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            }
+
+                            // --- 3. PRESCRIPTION ISSUED CARD ---
+                            if (item.type === 'rx') {
+                              const medList = (item.raw || '').replace('PRESCRIPTION ISSUED:', '').trim();
+                              return (
+                                <div key={item.id || idx} className="relative flex items-start gap-4 group">
+                                  <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 border-4 border-white shadow-md flex items-center justify-center text-white shrink-0 z-10 -ml-[13px] sm:-ml-[17px]">
+                                    <Pill className="w-4 h-4" />
+                                  </div>
+                                  <div className="flex-1 bg-white border border-emerald-100 rounded-2xl p-5 shadow-sm hover:shadow-md transition-shadow">
+                                    <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                                      <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full tracking-wider border border-emerald-200">
+                                        💊 Prescription Issued
+                                      </span>
+                                      <span className="text-[11px] font-semibold text-slate-400">{itemDate}</span>
+                                    </div>
+                                    <h3 className="text-sm font-bold text-slate-800 mb-2">Prescribed by Dr. {item.doctor}</h3>
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {medList.split(',').map((m: string, i: number) => (
+                                        <span key={i} className="text-xs font-semibold bg-emerald-50 text-emerald-800 px-3 py-1 rounded-xl border border-emerald-100 flex items-center gap-1.5">
+                                          <Pill className="w-3 h-3 text-emerald-600" /> {m.trim()}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            }
+
+                            // --- 4. GENERAL CLINICAL NOTE CARD ---
+                            return (
+                              <div key={item.id || idx} className="relative flex items-start gap-4 group">
+                                <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-2xl bg-slate-200 border-4 border-white shadow-md flex items-center justify-center text-slate-600 shrink-0 z-10 -ml-[13px] sm:-ml-[17px]">
+                                  <FileText className="w-4 h-4" />
+                                </div>
+                                <div className="flex-1 bg-white border border-slate-200/80 rounded-2xl p-5 shadow-sm hover:shadow-md transition-shadow">
+                                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                                    <span className="bg-slate-100 text-slate-600 text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full tracking-wider border border-slate-200">
+                                      📝 Clinical Note
+                                    </span>
+                                    <span className="text-[11px] font-semibold text-slate-400">{itemDate}</span>
+                                  </div>
+                                  <h3 className="text-sm font-bold text-slate-800 mb-1">Dr. {item.doctor}</h3>
+                                  <p className="text-xs text-slate-600 leading-relaxed">{item.raw}</p>
+                                </div>
+                              </div>
+                            );
+                          });
+                        })()}
                       </div>
 
-                      <button onClick={() => setTab(1)} className="w-full mt-8 py-4 border-2 border-dashed border-slate-200 rounded-2xl text-slate-500 font-bold text-sm hover:border-[#2563EB] hover:text-[#2563EB] transition-colors flex items-center justify-center gap-2 bg-slate-50 hover:bg-blue-50/30">
+                      <button onClick={() => setTab(1)} className="w-full mt-6 py-3.5 border-2 border-dashed border-slate-200 rounded-2xl text-slate-500 font-bold text-sm hover:border-[#2563EB] hover:text-[#2563EB] transition-colors flex items-center justify-center gap-2 bg-slate-50 hover:bg-blue-50/30">
                         <Plus className="w-4 h-4" /> Add Clinical Entry
                       </button>
                     </div>
@@ -884,7 +1103,7 @@ export default function PatientDetail() {
                   </div>
                 </div>
               </div>
-            )}
+            )})()}
 
             {/* 🔴 TAB 1: MANUAL HISTORY */}
             {tab === 1 && (

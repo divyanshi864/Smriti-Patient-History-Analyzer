@@ -134,9 +134,9 @@ async def google_fit_sync(req: GoogleFitSyncRequest):
     headers = {"Authorization": f"Bearer {req.access_token}"}
     base_url = "https://www.googleapis.com/fitness/v1/users/me"
 
-    # Last 48 hours to account for timezone differences
+    # 30 days window so no steps are missed
     end_ms = int(time.time() * 1000)
-    start_ms = end_ms - (48 * 60 * 60 * 1000)
+    start_ms = end_ms - (30 * 24 * 60 * 60 * 1000)
     end_ns = end_ms * 1_000_000
     start_ns = start_ms * 1_000_000
     dataset_id = f"{start_ns}-{end_ns}"
@@ -147,158 +147,145 @@ async def google_fit_sync(req: GoogleFitSyncRequest):
         "recorded_at": datetime.utcnow().isoformat()
     }
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        # 1. Single fetch for all data sources
-        data_sources = []
+    from urllib.parse import quote
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        total_steps = 0
+        latest_hr = None
+        latest_spo2 = None
+
+        # 1. Comprehensive Google Fit Aggregate Query
+        try:
+            agg_res = await client.post(
+                f"{base_url}/dataset:aggregate",
+                headers={**headers, "Content-Type": "application/json"},
+                json={
+                    "aggregateBy": [
+                        {"dataTypeName": "com.google.step_count.delta"},
+                        {"dataTypeName": "com.google.heart_rate.bpm"},
+                        {"dataTypeName": "com.google.oxygen_saturation"}
+                    ],
+                    "bucketByTime": {"durationMillis": 86400000},
+                    "startTimeMillis": start_ms,
+                    "endTimeMillis": end_ms
+                }
+            )
+            print(f"📊 Google Fit Aggregate Response Status: {agg_res.status_code}")
+            if agg_res.status_code == 200:
+                agg_data = agg_res.json()
+                for bucket in agg_data.get("bucket", []):
+                    for ds in bucket.get("dataset", []):
+                        dtype = (ds.get("dataSourceId", "") + ds.get("dataTypeName", "")).lower()
+                        for pt in ds.get("point", []):
+                            vals = pt.get("value", [])
+                            if not vals: continue
+                            
+                            # Steps
+                            if "step" in dtype:
+                                for v in vals:
+                                    st = int(v.get("intVal", 0) or v.get("fpVal", 0))
+                                    if st > 0:
+                                        total_steps += st
+                                        print(f"👟 Google Fit Phone Step Chunk: +{st} steps (running total: {total_steps})")
+                            
+                            # Heart Rate
+                            elif "heart" in dtype:
+                                hr = int(vals[0].get("fpVal", 0) or vals[0].get("intVal", 0))
+                                if hr > 0: latest_hr = hr
+                            
+                            # SpO2
+                            elif "oxygen" in dtype or "spo2" in dtype:
+                                ox = round(float(vals[0].get("fpVal", 0) or vals[0].get("intVal", 0)), 1)
+                                if 50 <= ox <= 100: latest_spo2 = ox
+            else:
+                print(f"⚠️ Aggregate error body: {agg_res.text}")
+        except Exception as e:
+            print(f"⚠️ Google Fit aggregate error: {e}")
+
+        # 2. Direct Query to Google Fit Official Step Streams (URL ENCODED)
+        candidate_step_streams = [
+            "derived:com.google.step_count.delta:com.google.android.gms:estimated_steps",
+            "derived:com.google.step_count.delta:com.google.android.gms:merge_step_deltas",
+            "raw:com.google.step_count.delta:com.google.android.apps.fitness:user_input",
+            "derived:com.google.step_count.delta:com.google.android.gms:aggregated_step_deltas"
+        ]
+        for c_stream in candidate_step_streams:
+            try:
+                encoded_stream = quote(c_stream, safe="")
+                ds_res = await client.get(f"{base_url}/dataSources/{encoded_stream}/datasets/{dataset_id}", headers=headers)
+                if ds_res.status_code == 200:
+                    pts = ds_res.json().get("point", [])
+                    print(f"      🎯 Direct Phone Step Stream '{c_stream}': found {len(pts)} points")
+                    c_sum = 0
+                    for p in pts:
+                        for v in p.get("value", []):
+                            val = int(v.get("intVal", 0) or v.get("fpVal", 0))
+                            if val > 0: c_sum += val
+                    if c_sum > 0:
+                        print(f"      👟 Direct Google Fit Phone Steps: {c_sum}")
+                        if c_sum > total_steps:
+                            total_steps = c_sum
+            except Exception as e:
+                print(f"      ⚠️ Direct Stream error: {e}")
+
+        # 3. Query ALL Discovered Data Sources (URL ENCODED)
         try:
             r = await client.get(f"{base_url}/dataSources", headers=headers)
             if r.status_code == 200:
                 data_sources = r.json().get("dataSource", [])
+                print(f"📡 Discovered {len(data_sources)} data sources from Google Fit account:")
+                
+                for s in data_sources:
+                    stream_id = s.get("dataStreamId", "")
+                    s_lower = stream_id.lower()
+                    data_type = str(s.get("dataType", {})).lower()
+                    encoded_id = quote(stream_id, safe="")
+                    print(f"   -> Stream: '{stream_id}' | Type: {data_type}")
+                    
+                    try:
+                        ds_res = await client.get(f"{base_url}/dataSources/{encoded_id}/datasets/{dataset_id}", headers=headers)
+                        if ds_res.status_code == 200:
+                            pts = ds_res.json().get("point", [])
+                            if pts:
+                                print(f"      📍 Found {len(pts)} points in stream '{stream_id}'")
+                                stream_step_sum = 0
+                                for p in pts:
+                                    for v in p.get("value", []):
+                                        val = int(v.get("intVal", 0) or v.get("fpVal", 0))
+                                        if val > 0: stream_step_sum += val
+                                
+                                if "step" in s_lower or "step" in data_type:
+                                    print(f"      👟 Stream Steps Sum: {stream_step_sum}")
+                                    if stream_step_sum > total_steps:
+                                        total_steps = stream_step_sum
+                                
+                                if ("heart" in s_lower or "pulse" in s_lower) and not latest_hr:
+                                    last_hr = int(pts[-1]["value"][0].get("fpVal", 0) or pts[-1]["value"][0].get("intVal", 0))
+                                    if last_hr > 0:
+                                        latest_hr = last_hr
+                                        print(f"      ❤️ Stream HR: {last_hr} bpm")
+                    except Exception as e:
+                        print(f"      ⚠️ Stream read error: {e}")
         except Exception as e:
-            print(f"⚠️ dataSources fetch error: {e}")
+            print(f"⚠️ Data sources scan error: {e}")
 
-        # Print ALL sources to debug
-        print(f"📡 Total Google Fit Data Sources found: {len(data_sources)}")
-        for s in data_sources:
-            stream_id = s.get("dataStreamId", "")
-            dtype = s.get("dataType", {}).get("name", "")
-            if any(k in stream_id.lower() or k in dtype.lower() for k in ["boat", "coveiot", "heart", "step", "oxygen", "spo2"]):
-                print(f"   -> Stream: {stream_id} | Type: {dtype}")
-
-        # Group sources by keyword (case-insensitive)
-        hr_sources = [s["dataStreamId"] for s in data_sources if any(k in s.get("dataStreamId", "").lower() or k in s.get("dataType", {}).get("name", "").lower() for k in ["heart_rate", "heart"])]
-        step_sources = [s["dataStreamId"] for s in data_sources if any(k in s.get("dataStreamId", "").lower() or k in s.get("dataType", {}).get("name", "").lower() for k in ["step", "estimated_steps"])]
-        spo2_sources = [s["dataStreamId"] for s in data_sources if any(k in s.get("dataStreamId", "").lower() or k in s.get("dataType", {}).get("name", "").lower() for k in ["oxygen", "spo2", "saturation"])]
-
-        # Standard Google Fit merged fallbacks
-        default_hr = "derived:com.google.heart_rate.bpm:com.google.android.gms:merge_heart_rate_bpm"
-        default_steps = "derived:com.google.step_count.delta:com.google.android.gms:merge_step_deltas"
-        estimated_steps = "derived:com.google.step_count.delta:com.google.android.gms:estimated_steps"
-        
-        all_hr = list(dict.fromkeys(hr_sources + [default_hr]))
-        all_steps = list(dict.fromkeys(step_sources + [default_steps, estimated_steps]))
-
-        # Async helper to fetch dataset
-        async def fetch_dataset(source_id: str):
-            try:
-                res = await client.get(f"{base_url}/dataSources/{source_id}/datasets/{dataset_id}", headers=headers)
-                if res.status_code == 200:
-                    return source_id, res.json().get("point", [])
-            except Exception:
-                pass
-            return source_id, []
-
-        # 2. Fetch all datasets in parallel
-        tasks = [fetch_dataset(src) for src in (all_hr[:5] + all_steps[:8] + spo2_sources[:3])]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # 3. Process Heart Rate
-        for res in results:
-            if isinstance(res, tuple):
-                src_id, pts = res
-                if "heart" in src_id.lower() and pts:
-                    val = pts[-1]["value"][0].get("fpVal", 0) or pts[-1]["value"][0].get("intVal", 0)
-                    if val > 0:
-                        vitals["heart_rate"] = str(int(val))
-                        print(f"✅ HR: {vitals['heart_rate']} bpm (from {src_id})")
-                        break
-
-        # 4. Process Steps (Exact 100% Real Google Fit Count)
-        total_steps = 0
-
-        # Sum all steps from all discovered step datasets
-        for res in results:
-            if isinstance(res, tuple):
-                src_id, pts = res
-                if "step" in src_id.lower() and pts:
-                    stream_sum = 0
-                    for pt in pts:
-                        for val in pt.get("value", []):
-                            v = val.get("intVal", 0) or int(val.get("fpVal", 0))
-                            if v > 0:
-                                stream_sum += v
-                    if stream_sum > total_steps:
-                        total_steps = stream_sum
-                        print(f"📡 Found {stream_sum} real steps in {src_id}")
-
-        # Dedicated direct query for estimated_steps (Google Fit official display source)
-        try:
-            est_res = await client.get(
-                f"{base_url}/dataSources/derived:com.google.step_count.delta:com.google.android.gms:estimated_steps/datasets/{dataset_id}",
-                headers=headers
-            )
-            if est_res.status_code == 200:
-                est_pts = est_res.json().get("point", [])
-                est_sum = 0
-                for pt in est_pts:
-                    for val in pt.get("value", []):
-                        v = val.get("intVal", 0) or int(val.get("fpVal", 0))
-                        if v > 0:
-                            est_sum += v
-                if est_sum > total_steps:
-                    total_steps = est_sum
-                    print(f"✅ Real Google Fit Estimated Steps: {total_steps}")
-        except Exception as e:
-            print(f"Estimated steps error: {e}")
-
-        # Aggregate API check
-        if total_steps == 0:
-            try:
-                agg_res = await client.post(
-                    f"{base_url}/dataset:aggregate",
-                    headers={**headers, "Content-Type": "application/json"},
-                    json={
-                        "aggregateBy": [
-                            {"dataTypeName": "com.google.step_count.delta"}
-                        ],
-                        "bucketByTime": {"durationMillis": 86400000},
-                        "startTimeMillis": start_ms,
-                        "endTimeMillis": end_ms
-                    }
-                )
-                if agg_res.status_code == 200:
-                    for bucket in agg_res.json().get("bucket", []):
-                        for ds in bucket.get("dataset", []):
-                            for pt in ds.get("point", []):
-                                for val in pt.get("value", []):
-                                    st = int(val.get("intVal", 0) or val.get("fpVal", 0))
-                                    if st > total_steps:
-                                        total_steps = st
-            except Exception as e:
-                print(f"Steps agg error: {e}")
-
+        # Set final vitals values
         if total_steps > 0:
-            vitals["steps"] = str(total_steps)
-            print(f"✅ Final Real Steps Logged: {total_steps}")
-        else:
-            vitals["steps"] = "138"
-            print(f"✅ Steps (synced): 138")
+            vitals["steps"] = total_steps
+        if latest_hr:
+            vitals["heart_rate"] = str(latest_hr)
+        if latest_spo2:
+            vitals["spo2"] = latest_spo2
 
+    # Set real status notes
+    synced_items = [f"{k}: {v}" for k, v in vitals.items() if k in ["steps", "heart_rate", "spo2", "temperature", "blood_pressure"]]
+    if synced_items:
+        vitals["notes"] = f"Google Fit Live Sync ({', '.join(synced_items)})"
+    else:
+        vitals["notes"] = "Google Fit Synced (0 live points found in Google account for last 48h)"
+        vitals["steps"] = "0"
 
-
-        # 5. Process SpO2 (Priority to real Google Fit data -> smart telemetry with live watch HR)
-        spo2_val = None
-        for res in results:
-            if isinstance(res, tuple):
-                src_id, pts = res
-                if any(k in src_id.lower() for k in ["oxygen", "spo2"]) and pts:
-                    val = pts[-1]["value"][0].get("fpVal", 0)
-                    if 70 <= val <= 100:
-                        spo2_val = round(val, 1)
-                        print(f"✅ Real SpO2 from cloud: {spo2_val}%")
-                        break
-
-        if spo2_val:
-            vitals["spo2"] = str(spo2_val)
-        elif vitals.get("heart_rate"):
-            vitals["spo2"] = "97.8"
-            print("✅ SpO2: 97.8% (synced with boAt telemetry)")
-
-
-
-
-
-    print(f"✅ Final Synced Vitals: {vitals}")
+    print(f"✅ Final Real Synced Vitals Payload: {vitals}")
 
     # Save to Supabase
     result = supabase.table("vitals").insert(vitals).execute()
@@ -330,16 +317,41 @@ async def analyze(req: AnalyzeRequest):
     patient = get_patient(req.patient_id)
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
-    try:
-        from app.services.db_service import supabase
-        supabase.table("audit_log").insert({
-            "action": "AI_ANALYSIS", "patient_id": req.patient_id,
-            "details": f"Symptoms: {req.symptoms}"
-        }).execute()
-    except: pass
+    
     filtered = await filter_record(patient["record_text"], req.symptoms)
     result = await get_recommendation(filtered, req.symptoms, patient)
     result["latency_ms"] = round((time.time() - start) * 1000)
+
+    try:
+        from app.services.db_service import supabase
+        # 1. Audit log entry
+        audit_payload = {
+            "symptoms": req.symptoms,
+            "primary_diagnosis": result.get("primary_diagnosis"),
+            "risk_level": result.get("risk_level"),
+            "confidence": result.get("confidence"),
+            "immediate_actions": result.get("immediate_actions", []),
+            "medications": result.get("medications", []),
+            "reasoning": result.get("reasoning", "")
+        }
+        supabase.table("audit_log").insert({
+            "action": "AI_ANALYSIS",
+            "patient_id": req.patient_id,
+            "performed_by": "AI Clinical Analyzer",
+            "details": json.dumps(audit_payload)
+        }).execute()
+
+        # 2. Save into doctor_notes for full history timeline
+        meds_summary = ", ".join([f"{m.get('name')} ({m.get('dose', '')})" for m in result.get("medications", []) if isinstance(m, dict)])
+        formatted_note = f"🤖 AI ANALYSIS REPORT\nDiagnosis: {result.get('primary_diagnosis')} ({result.get('risk_level')} Risk - {result.get('confidence')}%)\nSymptoms: {req.symptoms}\nActions: {', '.join(result.get('immediate_actions', []))}\nSuggested Meds: {meds_summary or 'None'}\nReasoning: {result.get('reasoning', '')}"
+        supabase.table("doctor_notes").insert({
+            "patient_id": req.patient_id,
+            "doctor_name": "AI Clinical Analyzer",
+            "note": formatted_note
+        }).execute()
+    except Exception as e:
+        print(f"Failed to record AI analysis to database: {e}")
+
     return result
 
 @app.post("/api/medicine-suggestions")
