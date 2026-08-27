@@ -37,6 +37,7 @@ export default function LandingPage() {
           display: flex;
           justify-content: flex-end;
           align-items: center;
+          gap: 12px;
           background: transparent;
           z-index: 50;
         }
@@ -70,6 +71,26 @@ export default function LandingPage() {
         .nav-pill:hover {
           transform: translateY(-2px);
           box-shadow: 0 6px 20px rgba(90,158,120,0.4);
+        }
+
+        .nav-smart-queue {
+          display: inline-flex; align-items: center; gap: 6px;
+          font-size: 13px; font-weight: 600; color: #1E2860;
+          padding: 9px 18px; border-radius: 24px;
+          border: 1.5px solid rgba(104,120,200,0.30);
+          text-decoration: none;
+          background: rgba(255,255,255,0.9);
+          backdrop-filter: blur(8px);
+          box-shadow: 0 3px 12px rgba(104,120,200,0.15);
+          transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+          font-family: 'DM Sans', sans-serif;
+        }
+        .nav-smart-queue:hover {
+          background: linear-gradient(135deg, #6878C8, #4D5DB0);
+          color: white;
+          border-color: transparent;
+          transform: translateY(-2px);
+          box-shadow: 0 6px 18px rgba(104,120,200,0.35);
         }
 
         /* ── DIAGONAL BG ── */
@@ -258,6 +279,20 @@ export default function LandingPage() {
             </svg>
             About & Team
           </Link>
+          <a
+            href="https://smriti-appointment.vercel.app/patient/travel"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="nav-smart-queue"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <path d="M16 2v4" />
+              <path d="M8 2v4" />
+              <path d="M3 10h18" />
+            </svg>
+            Smart_Queue
+          </a>
         </nav>
 
         {/* ── LEFT COLUMN ── */}
